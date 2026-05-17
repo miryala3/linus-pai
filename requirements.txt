@@ -14,8 +14,9 @@ rich>=13.7
 pypdf>=4.2
 
 # RAG embeddings
-sentence-transformers>=3.0
-numpy>=1.26
+torch
+numpy>=1.26,<2.0
+sentence-transformers>=3.0,<4.0
 
 # Apple Silicon (auto-installed by aio.py --install on arm64 macOS)
 # mlx>=0.16

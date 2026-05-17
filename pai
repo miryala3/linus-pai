@@ -117,7 +117,8 @@ _find_python() {
     echo "${PAI_VENV_DIR}/bin/python3"; return 0
   fi
   # 4. System Python 3.10+
-  for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
+  # Prefer 3.12 over 3.13: torch/sentence-transformers have no 3.13 wheels yet
+  for candidate in python3.12 python3.11 python3.10 python3.13 python3; do
     if command -v "$candidate" &>/dev/null && _python_ok "$(command -v "$candidate")"; then
       echo "$(command -v "$candidate")"; return 0
     fi

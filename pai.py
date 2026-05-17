@@ -98,7 +98,10 @@ _BASE_PKGS = [
 ]
 _MLX_PKGS   = ["mlx>=0.16", "mlx-lm>=0.16"]
 _GGUF_PKGS  = []   # compiled below per platform
-_RAG_PKGS   = ["sentence-transformers>=3.0", "numpy>=1.26"]
+_RAG_PKGS   = ["torch", "numpy>=1.26,<2.0", "sentence-transformers>=3.0,<4.0"]
+# Install order matters: torch first so pip respects its numpy constraint,
+# then numpy pinned <2.0 (torch<=2.3 on Intel Mac CPU needs numpy 1.x),
+# then sentence-transformers 3.x (works with torch>=1.11; 4.x needs torch>=2.4).
 _TRAIN_PKGS = []   # MLX only; GGUF training via llama-cpp-python
 
 
@@ -116,7 +119,18 @@ def bootstrap(force: bool = False) -> None:
         return
     log.info("Bootstrapping PAI dependencies…")
     _pip(*_BASE_PKGS)
-    _pip(*_RAG_PKGS)
+
+    # RAG embeddings: sentence-transformers requires torch which has no py3.13
+    # wheels yet.  Installation failure is non-fatal — RagStore falls back to
+    # keyword BM25-style search automatically when sentence-transformers is absent.
+    try:
+        _pip(*_RAG_PKGS)
+    except Exception as e:
+        log.warning(
+            f"sentence-transformers install failed ({e}). "
+            "RAG will use keyword search instead of cosine similarity. "
+            "Run with Python 3.12 for full embedding support."
+        )
 
     plat = platform.system().lower()
     machine = platform.machine().lower()
@@ -2869,13 +2883,26 @@ def run_doctor() -> bool:
 
     # Core packages
     for pkg in ("psutil", "fastapi", "uvicorn", "streamlit", "rich",
-                "requests", "ddgs", "huggingface_hub",
-                "sentence_transformers", "pypdf"):
+                "requests", "ddgs", "huggingface_hub", "pypdf"):
         try:
             mod = importlib.import_module(pkg.replace("-", "_").replace(".", "_"))
             chk(pkg, True, getattr(mod, "__version__", "ok"))
         except ImportError:
             chk(pkg, False, f"pip install {pkg}")
+
+    # sentence-transformers: optional (torch has no Python 3.13 wheel yet)
+    try:
+        import sentence_transformers as _st
+        chk("sentence-transformers (RAG embeddings)", True, _st.__version__)
+    except ImportError:
+        py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+        if sys.version_info >= (3, 13):
+            chk("sentence-transformers (RAG embeddings)", False,
+                f"torch has no Python {py_ver} wheel — use Python 3.12 for full RAG "
+                "(keyword fallback is active)")
+        else:
+            chk("sentence-transformers (RAG embeddings)", False,
+                "pip install sentence-transformers")
 
     # llama-cpp-python
     try:
