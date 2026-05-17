@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=AIO Local AI
+GenericName=Local AI Runtime
+Comment=All-In-One local AI inference, RAG, and agentic tasks
+Exec=bash -c "cd $(dirname %k)/.. && bash runaio.sh"
+Icon=utilities-terminal
+Terminal=true
+Categories=Science;Development;Utility;
+Keywords=AI;LLM;inference;agent;local;
+StartupNotify=true

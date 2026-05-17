@@ -1,0 +1,31 @@
+# AIO — All-In-One Local AI Runtime
+# Core (all platforms)
+fastapi>=0.111
+uvicorn[standard]>=0.29
+pydantic>=2.0
+requests>=2.31
+psutil>=5.9
+duckduckgo-search>=6.1
+huggingface_hub>=0.22
+tqdm>=4.66
+python-multipart>=0.0.9
+aiofiles>=23.2
+rich>=13.7
+pypdf>=4.2
+
+# RAG embeddings
+sentence-transformers>=3.0
+numpy>=1.26
+
+# Apple Silicon (auto-installed by aio.py --install on arm64 macOS)
+# mlx>=0.16
+# mlx-lm>=0.16
+
+# GGUF inference (compiled per-platform by aio.py --install)
+# llama-cpp-python>=0.2.80
+# Metal build:  CMAKE_ARGS="-DGGML_METAL=on" pip install llama-cpp-python --no-cache-dir
+# CUDA build:   CMAKE_ARGS="-DGGML_CUDA=on"  pip install llama-cpp-python --no-cache-dir
+# CPU build:    pip install llama-cpp-python
+
+# Streamlit (UI)
+streamlit>=1.35

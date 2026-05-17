@@ -1,0 +1,30 @@
+{
+  "name": "AIO Local AI",
+  "image": "python:3.12-slim",
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "forwardPorts": [9480, 8501],
+  "portsAttributes": {
+    "9480": { "label": "AIO API", "onAutoForward": "notify" },
+    "8501": { "label": "AIO UI",  "onAutoForward": "openBrowser" }
+  },
+  "postCreateCommand": "apt-get update -qq && apt-get install -y cmake build-essential libopenblas-dev -qq && pip install -r requirements.txt -q && pip install llama-cpp-python -q",
+  "remoteEnv": {
+    "AIO_DATA_DIR": "/workspaces/aio/aio_data"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.black-formatter",
+        "charliermarsh.ruff"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python3",
+        "editor.formatOnSave": true
+      }
+    }
+  }
+}

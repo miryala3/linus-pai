@@ -1,0 +1,240 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pipeline overview
+#   1. validate   — syntax check + tests on ubuntu
+#   2. build      — build native binaries on every platform in parallel
+#   3. release    — create GitHub Release, attach all binaries + source files
+# ─────────────────────────────────────────────────────────────────────────────
+
+jobs:
+
+  # ── 1. Validate ─────────────────────────────────────────────────────────────
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=$(grep 'PAI_VERSION' pai.py | head -1 | grep -oP '"\K[^"]+')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building release v$VERSION"
+
+      - name: Syntax check
+        run: |
+          python -c "import ast; ast.parse(open('pai.py').read()); print('pai.py OK')"
+          python -c "import ast; ast.parse(open('build/launcher.py').read()); print('launcher.py OK')"
+          bash -n pai && echo "pai OK"
+          bash -n runpai.sh && echo "runpai.sh OK"
+
+      - name: Quick tests
+        run: |
+          pip install -r requirements.txt -q
+          pip install pytest -q
+          pip install llama-cpp-python -q   # CPU-only for CI
+          pytest test_pai.py -v \
+            -k "not Live and not Network" \
+            --tb=short -q
+
+      - name: Extract changelog section
+        id: changelog
+        run: |
+          awk "/^## \[${{ steps.version.outputs.version }}\]/{found=1; next} \
+               /^## \[/{if(found) exit} found" \
+            CHANGELOG.md > release_notes.txt
+          echo "Release notes:"
+          cat release_notes.txt
+
+  # ── 2. Build native binaries (matrix) ───────────────────────────────────────
+  build:
+    name: Build ${{ matrix.name }}
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── macOS arm64 (Apple Silicon) ──────────────────────────────────
+          - name: macOS-arm64
+            os: macos-latest          # GitHub's M1/M2 runners
+            artifact: pai-macos-arm64
+            ext: ""
+
+          # ── macOS x86_64 (Intel) ─────────────────────────────────────────
+          - name: macOS-x86_64
+            os: macos-13              # last Intel runner on GitHub
+            artifact: pai-macos-x86_64
+            ext: ""
+
+          # ── Linux x86_64 ─────────────────────────────────────────────────
+          - name: Linux-x86_64
+            os: ubuntu-latest
+            artifact: pai-linux-x86_64
+            ext: ""
+
+          # ── Linux arm64 ──────────────────────────────────────────────────
+          - name: Linux-arm64
+            os: ubuntu-24.04-arm      # GitHub's free arm64 runner
+            artifact: pai-linux-arm64
+            ext: ""
+
+          # ── Windows x86_64 ───────────────────────────────────────────────
+          - name: Windows-x86_64
+            os: windows-latest
+            artifact: pai-windows-x86_64
+            ext: ".exe"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      # ── Linux system deps (for llama-cpp-python compilation) ────────────────
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake build-essential libopenblas-dev -qq
+
+      # ── macOS: cmake ─────────────────────────────────────────────────────────
+      - name: Install macOS system deps
+        if: runner.os == 'macOS'
+        run: brew install cmake
+
+      # ── Build venv for PyInstaller ──────────────────────────────────────────
+      - name: Set up build environment
+        shell: bash
+        run: |
+          python -m venv .build_venv
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            source .build_venv/Scripts/activate
+          else
+            source .build_venv/bin/activate
+          fi
+          pip install --upgrade pip wheel -q
+          pip install pyinstaller -q
+          # CPU-only llama-cpp for the bootstrap layer (no GPU in CI)
+          pip install llama-cpp-python -q || true
+
+      # ── PyInstaller build ────────────────────────────────────────────────────
+      - name: Build binary
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            source .build_venv/Scripts/activate
+          else
+            source .build_venv/bin/activate
+          fi
+          pyinstaller build/pai.spec \
+            --distpath dist \
+            --workpath build/pai.build \
+            --noconfirm \
+            --log-level WARN \
+            --noupx
+
+      # ── Rename to platform-specific artifact name ────────────────────────────
+      - name: Rename binary
+        shell: bash
+        run: |
+          BINARY="dist/pai${{ matrix.ext }}"
+          TARGET="dist/${{ matrix.artifact }}${{ matrix.ext }}"
+          mv "$BINARY" "$TARGET"
+          ls -lh "$TARGET"
+
+      # ── Smoke test ───────────────────────────────────────────────────────────
+      - name: Smoke test
+        shell: bash
+        run: |
+          BINARY="dist/${{ matrix.artifact }}${{ matrix.ext }}"
+          chmod +x "$BINARY" 2>/dev/null || true
+          OUTPUT=$("$BINARY" --version 2>&1 || true)
+          echo "Output: $OUTPUT"
+          echo "$OUTPUT" | grep -q "Linus PAI" && echo "PASS" || echo "WARN: unexpected output"
+
+      # ── Generate SHA-256 checksum ─────────────────────────────────────────────
+      - name: Generate checksum
+        shell: bash
+        run: |
+          BINARY="dist/${{ matrix.artifact }}${{ matrix.ext }}"
+          if command -v sha256sum &>/dev/null; then
+            sha256sum "$BINARY" > "$BINARY.sha256"
+          else
+            shasum -a 256 "$BINARY" > "$BINARY.sha256"
+          fi
+          cat "$BINARY.sha256"
+
+      # ── Upload artifact for release job ──────────────────────────────────────
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/${{ matrix.artifact }}${{ matrix.ext }}
+            dist/${{ matrix.artifact }}${{ matrix.ext }}.sha256
+          retention-days: 1
+
+  # ── 3. Create GitHub Release ─────────────────────────────────────────────────
+  release:
+    name: Create Release
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: List release assets
+        run: ls -lh dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Linus PAI v${{ needs.validate.outputs.version }}"
+          body_path: release_notes.txt
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+          files: |
+            dist/pai-macos-arm64
+            dist/pai-macos-arm64.sha256
+            dist/pai-macos-x86_64
+            dist/pai-macos-x86_64.sha256
+            dist/pai-linux-x86_64
+            dist/pai-linux-x86_64.sha256
+            dist/pai-linux-arm64
+            dist/pai-linux-arm64.sha256
+            dist/pai-windows-x86_64.exe
+            dist/pai-windows-x86_64.exe.sha256
+            pai
+            pai.cmd
+            pai.py
+            runpai.sh
+            stoppai.sh
+            install.sh
+            requirements.txt
+            Dockerfile

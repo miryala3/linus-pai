@@ -1,0 +1,68 @@
+Linus PAI — Private AI Runtime
+Copyright 2025 The Linus PAI Contributors
+
+This product includes software developed by:
+- The Linus PAI project (https://github.com/miryala3/linus-pai)
+
+This software is released under the Apache License, Version 2.0.
+See LICENSE for the full text.
+
+────────────────────────────────────────────────────────────────────────────────
+Third-party components used at runtime (not bundled — installed by the user):
+
+MLX / mlx-lm
+  License: Apache 2.0
+  Copyright: Apple Inc.
+  https://github.com/ml-explore/mlx
+
+llama-cpp-python
+  License: MIT
+  Copyright: Andrei Betlen and contributors
+  https://github.com/abetlen/llama-cpp-python
+
+llama.cpp
+  License: MIT
+  Copyright: Georgi Gerganov and contributors
+  https://github.com/ggerganov/llama.cpp
+
+FastAPI
+  License: MIT
+  Copyright: Sebastián Ramírez and contributors
+  https://fastapi.tiangolo.com
+
+Streamlit
+  License: Apache 2.0
+  Copyright: Streamlit Inc.
+  https://streamlit.io
+
+Rich
+  License: MIT
+  Copyright: Will McGugan and contributors
+  https://github.com/Textualize/rich
+
+huggingface_hub
+  License: Apache 2.0
+  Copyright: Hugging Face Inc.
+  https://huggingface.co
+
+sentence-transformers
+  License: Apache 2.0
+  Copyright: Nils Reimers and contributors
+  https://www.sbert.net
+
+duckduckgo-search (ddgs)
+  License: MIT
+  Copyright: deedy5 and contributors
+  https://github.com/deedy5/duckduckgo_search
+
+────────────────────────────────────────────────────────────────────────────────
+Models downloaded by this software are subject to their own licenses.
+Consult the model card on Hugging Face for each model's license terms.
+Notable licenses:
+  Llama family     : Meta Llama Community License (commercial use allowed with conditions)
+  Mistral family   : Apache 2.0 (Mistral 7B, Mixtral, Nemo) or Mistral Research License
+  Qwen family      : Qwen License Agreement
+  Gemma family     : Gemma Terms of Use (Google)
+  Microsoft Phi    : Microsoft Research License
+  Command R family : Creative Commons Attribution 4.0 (Command R, Command R+)
+  DeepSeek family  : DeepSeek Model License

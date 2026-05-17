@@ -1,0 +1,143 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Linus PAI — .gitignore
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
+*.whl
+pip-wheel-metadata/
+MANIFEST
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+.env.bak
+
+# ── PAI runtime data (NEVER commit model weights or user data) ────────────────
+pai_data/
+aio_data/          # legacy name
+!pai_data/.gitkeep
+
+# ── Model weight files (large, re-downloadable) ───────────────────────────────
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.pkl
+*.npz
+mlx_model/
+
+# ── LoRA adapters (trained locally, user-specific) ───────────────────────────
+adapters/
+*.lora
+
+# ── Training buffers (contains user conversation data) ───────────────────────
+train_buffer/
+*_buffer.jsonl
+*.jsonl.done
+
+# ── RAG / vector indexes ──────────────────────────────────────────────────────
+rag/
+*.faiss
+*.index
+
+# ── Download state and query logs ────────────────────────────────────────────
+download_state.json
+query.log
+
+# ── Generated files ───────────────────────────────────────────────────────────
+pai_frontend.py
+aio_frontend.py
+*.bak.py
+*.pre_refactor.py
+*.*.bak.py
+.compiled_backend
+.node_id
+.bootstrapped
+
+# ── Secrets & credentials ─────────────────────────────────────────────────────
+.env
+*.env
+.env.*
+!.env.example
+secrets.json
+credentials.json
+*.pem
+*.key
+*.cert
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+*.log.*
+logs/
+~/.aio/
+
+# ── Test artefacts ────────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+junit.xml
+test-results/
+
+# ── Agent workspace ───────────────────────────────────────────────────────────
+agent_workspace/
+
+# ── OS files ─────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ── Editors ──────────────────────────────────────────────────────────────────
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+*.sublime-project
+*.sublime-workspace
+
+# ── Benchmarks output ────────────────────────────────────────────────────────
+bench_*.json
+*_benchmark.json
+
+# ── Compiled C extensions (llama-cpp-python build artefacts) ─────────────────
+_llama_cpp*.so
+llama_cpp/
+
+# ── Node (if samples touch JS tools) ─────────────────────────────────────────
+node_modules/
+package-lock.json
+
+# ── Binary build artefacts ────────────────────────────────────────────────────
+dist/
+build/pai.build/
+build/__pycache__/
+.build_venv/
+*.spec.bak
+
+# Compiled native binaries (released via GitHub Releases, not committed)
+dist/pai
+dist/pai.exe

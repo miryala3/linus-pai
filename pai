@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  Linus PAI — self-contained launcher                                        ║
+# ║  https://github.com/miryala3/linus-pai                                      ║
+# ║                                                                              ║
+# ║  No Python installation required. Run this file directly:                   ║
+# ║    chmod +x pai && ./pai                                                     ║
+# ║    ./pai --chat                                                              ║
+# ║    ./pai --doctor                                                            ║
+# ║                                                                              ║
+# ║  On first run: downloads a self-contained Python 3.12 runtime (~70 MB)      ║
+# ║  and compiles the GPU backend. Takes 5–15 minutes once, then instant.       ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+set -euo pipefail
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+PAI_VERSION="1.0.0"
+PAI_PYTHON_VERSION="3.12.8"
+PAI_PYTHON_RELEASE="20250115"
+PAI_HOME="${PAI_HOME:-${HOME}/.linus-pai}"
+PAI_PYTHON_DIR="${PAI_HOME}/python"
+PAI_VENV_DIR="${PAI_HOME}/venv"
+PAI_LOCK="${PAI_HOME}/.bootstrap.lock"
+PAI_LOG="${PAI_HOME}/bootstrap.log"
+PAI_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PAI_SCRIPT="${PAI_SCRIPT_DIR}/pai.py"
+
+# Allow overriding the Python binary (skip embedded download)
+PAI_PYTHON_BIN="${PAI_PYTHON:-}"
+
+mkdir -p "${PAI_HOME}"
+
+# ── Colours ───────────────────────────────────────────────────────────────────
+if [ -t 1 ]; then
+  BOLD='\033[1m'; DIM='\033[2m'
+  CYAN='\033[36m'; GREEN='\033[32m'; YELLOW='\033[33m'; RED='\033[31m'
+  RESET='\033[0m'
+else
+  BOLD=''; DIM=''; CYAN=''; GREEN=''; YELLOW=''; RED=''; RESET=''
+fi
+
+_banner() {
+  printf "${BOLD}${CYAN}"
+  printf "  ██╗     ██╗███╗   ██╗██╗   ██╗███████╗    ██████╗  █████╗ ██╗\n"
+  printf "  ██║     ██║████╗  ██║██║   ██║██╔════╝    ██╔══██╗██╔══██╗██║\n"
+  printf "  ██║     ██║██╔██╗ ██║██║   ██║███████╗    ██████╔╝███████║██║\n"
+  printf "  ██║     ██║██║╚██╗██║██║   ██║╚════██║    ██╔═══╝ ██╔══██║██║\n"
+  printf "  ███████╗██║██║ ╚████║╚██████╔╝███████║    ██║     ██║  ██║██║\n"
+  printf "  ╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚══════╝    ╚═╝     ╚═╝  ╚═╝╚═╝\n"
+  printf "${RESET}  Private AI Runtime v${PAI_VERSION}  ·  github.com/miryala3/linus-pai\n\n"
+}
+
+info()  { printf "${CYAN}[PAI]${RESET} %s\n" "$*"; }
+ok()    { printf "${GREEN}[OK]${RESET}  %s\n" "$*"; }
+warn()  { printf "${YELLOW}[!!]${RESET}  %s\n" "$*"; }
+err()   { printf "${RED}[ERR]${RESET} %s\n" "$*" >&2; }
+die()   { err "$*"; exit 1; }
+
+# ── Quick exit for --version / --help before bootstrap ────────────────────────
+for arg in "$@"; do
+  if [[ "$arg" == "--version" || "$arg" == "-V" ]]; then
+    echo "Linus PAI v${PAI_VERSION} (Python ${PAI_PYTHON_VERSION})"
+    exit 0
+  fi
+done
+
+# ── Detect platform / architecture ────────────────────────────────────────────
+OS="$(uname -s)"
+ARCH="$(uname -m)"
+
+case "${OS}" in
+  Darwin)
+    case "${ARCH}" in
+      arm64)   PY_TRIPLE="aarch64-apple-darwin";;
+      x86_64)  PY_TRIPLE="x86_64-apple-darwin";;
+      *)        die "Unsupported macOS architecture: ${ARCH}";;
+    esac
+    ;;
+  Linux)
+    case "${ARCH}" in
+      x86_64)  PY_TRIPLE="x86_64-unknown-linux-gnu";;
+      aarch64) PY_TRIPLE="aarch64-unknown-linux-gnu";;
+      armv7l)  PY_TRIPLE="armv7-unknown-linux-gnueabihf";;
+      *)        die "Unsupported Linux architecture: ${ARCH}";;
+    esac
+    ;;
+  *)
+    die "Unsupported OS: ${OS}. Use pai.cmd on Windows."
+    ;;
+esac
+
+PY_TARBALL="cpython-${PAI_PYTHON_VERSION}+${PAI_PYTHON_RELEASE}-${PY_TRIPLE}-install_only.tar.gz"
+PY_URL="https://github.com/indygreg/python-build-standalone/releases/download/${PAI_PYTHON_RELEASE}/${PY_TARBALL}"
+PY_BIN="${PAI_PYTHON_DIR}/bin/python3"
+
+# ── Detect if we already have a good Python ───────────────────────────────────
+_python_ok() {
+  local bin="$1"
+  [[ -x "$bin" ]] || return 1
+  local ver
+  ver=$("$bin" -c "import sys; print(sys.version_info >= (3,10))" 2>/dev/null) || return 1
+  [[ "$ver" == "True" ]]
+}
+
+_find_python() {
+  # 1. Env override
+  if [[ -n "${PAI_PYTHON_BIN}" ]] && _python_ok "${PAI_PYTHON_BIN}"; then
+    echo "${PAI_PYTHON_BIN}"; return 0
+  fi
+  # 2. Embedded (already downloaded)
+  if _python_ok "${PY_BIN}"; then
+    echo "${PY_BIN}"; return 0
+  fi
+  # 3. Venv Python (already bootstrapped)
+  if _python_ok "${PAI_VENV_DIR}/bin/python3"; then
+    echo "${PAI_VENV_DIR}/bin/python3"; return 0
+  fi
+  # 4. System Python 3.10+
+  for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
+    if command -v "$candidate" &>/dev/null && _python_ok "$(command -v "$candidate")"; then
+      echo "$(command -v "$candidate")"; return 0
+    fi
+  done
+  return 1
+}
+
+# ── Download embedded Python (python-build-standalone) ───────────────────────
+_download_python() {
+  info "No suitable Python found — downloading embedded Python ${PAI_PYTHON_VERSION}…"
+  info "Platform: ${OS} ${ARCH} → ${PY_TRIPLE}"
+  info "Source  : ${PY_URL}"
+  echo ""
+
+  local tmp_tar="${PAI_HOME}/${PY_TARBALL}"
+
+  # Choose downloader
+  if command -v curl &>/dev/null; then
+    curl -L --progress-bar --retry 3 --retry-delay 5 \
+         -o "${tmp_tar}" "${PY_URL}" || die "Download failed. Check network."
+  elif command -v wget &>/dev/null; then
+    wget --progress=bar:force -O "${tmp_tar}" "${PY_URL}" || die "Download failed."
+  else
+    die "Neither curl nor wget found. Install one and retry."
+  fi
+
+  echo ""
+  info "Extracting Python runtime…"
+  mkdir -p "${PAI_PYTHON_DIR}"
+  tar -xzf "${tmp_tar}" -C "${PAI_HOME}" 2>/dev/null
+  # python-build-standalone extracts to 'python/' — rename if needed
+  if [[ -d "${PAI_HOME}/python/bin" ]]; then
+    : # already correct
+  elif [[ -d "${PAI_HOME}/python/install/bin" ]]; then
+    mv "${PAI_HOME}/python/install"/* "${PAI_PYTHON_DIR}/"
+  fi
+  rm -f "${tmp_tar}"
+
+  if ! _python_ok "${PY_BIN}"; then
+    die "Extraction failed — ${PY_BIN} not found or not executable."
+  fi
+  ok "Embedded Python ${PAI_PYTHON_VERSION} ready at ${PAI_PYTHON_DIR}"
+}
+
+# ── Bootstrap venv and deps (runs once) ───────────────────────────────────────
+_bootstrap() {
+  # Prevent concurrent bootstraps
+  if [[ -e "${PAI_LOCK}" ]]; then
+    local lock_pid
+    lock_pid=$(cat "${PAI_LOCK}" 2>/dev/null || echo "")
+    if [[ -n "$lock_pid" ]] && kill -0 "$lock_pid" 2>/dev/null; then
+      warn "Another bootstrap is running (PID ${lock_pid}). Waiting…"
+      while [[ -e "${PAI_LOCK}" ]]; do sleep 2; done
+      return 0
+    fi
+    rm -f "${PAI_LOCK}"
+  fi
+
+  echo "$$" > "${PAI_LOCK}"
+  trap 'rm -f "${PAI_LOCK}"' EXIT
+
+  local python="$1"
+
+  _banner
+  info "First-run bootstrap (this takes 5–15 min, only once)"
+  info "Log: ${PAI_LOG}"
+  echo ""
+
+  # Create venv with embedded Python
+  info "Creating virtual environment…"
+  "$python" -m venv "${PAI_VENV_DIR}" 2>&1 | tee -a "${PAI_LOG}"
+  ok "venv created at ${PAI_VENV_DIR}"
+
+  local vpython="${PAI_VENV_DIR}/bin/python3"
+
+  # Upgrade pip silently
+  "$vpython" -m pip install --upgrade pip wheel setuptools -q 2>>"${PAI_LOG}"
+
+  # Run pai.py --install (compiles llama-cpp for local GPU)
+  info "Installing Linus PAI dependencies and compiling GPU backend…"
+  info "Detecting: ${OS} ${ARCH}"
+  PAI_DATA_DIR="${PAI_HOME}/data" \
+    "$vpython" "${PAI_SCRIPT}" --install 2>&1 | tee -a "${PAI_LOG}"
+
+  rm -f "${PAI_LOCK}"
+  trap - EXIT
+
+  echo ""
+  ok "Bootstrap complete! Linus PAI is ready."
+  echo ""
+}
+
+# ── Verify venv has core packages ─────────────────────────────────────────────
+_venv_ok() {
+  "${PAI_VENV_DIR}/bin/python3" -c "import fastapi, uvicorn, rich" 2>/dev/null
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+main() {
+  # Find or download Python
+  PYTHON="$(_find_python 2>/dev/null || true)"
+
+  if [[ -z "${PYTHON}" ]]; then
+    _download_python
+    PYTHON="${PY_BIN}"
+  fi
+
+  # Bootstrap venv if not present or incomplete
+  if ! _python_ok "${PAI_VENV_DIR}/bin/python3" || ! _venv_ok; then
+    _bootstrap "${PYTHON}"
+  fi
+
+  # Final Python to use
+  VENV_PYTHON="${PAI_VENV_DIR}/bin/python3"
+
+  # Launch pai.py with all arguments forwarded
+  PAI_DATA_DIR="${PAI_HOME}/data" \
+  exec "${VENV_PYTHON}" "${PAI_SCRIPT}" "$@"
+}
+
+main "$@"
