@@ -17,28 +17,55 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 
 OS="$(uname -s)"; ARCH="$(uname -m)"
-UNIVERSAL=false; USE_UPX=false; CLEAN_ONLY=false
+UNIVERSAL=false; USE_UPX=false; CLEAN_ONLY=false; CLEAN_DATA=false
 
 for arg in "$@"; do
   case "$arg" in
-    --universal) UNIVERSAL=true;;
-    --upx)       USE_UPX=true;;
-    --clean)     CLEAN_ONLY=true;;
+    --universal)   UNIVERSAL=true;;
+    --upx)         USE_UPX=true;;
+    --clean)       CLEAN_ONLY=true;;
+    --clean-data)  CLEAN_DATA=true;;
   esac
 done
 
 CYAN='\033[36m'; GREEN='\033[32m'; YELLOW='\033[33m'; RED='\033[31m'; RESET='\033[0m'
 info() { printf "${CYAN}[BUILD]${RESET} %s\n" "$*"; }
 ok()   { printf "${GREEN}[OK]${RESET}   %s\n" "$*"; }
+warn() { printf "${YELLOW}[WARN]${RESET} %s\n" "$*"; }
 err()  { printf "${RED}[ERR]${RESET}  %s\n" "$*" >&2; exit 1; }
 
-# ── Clean ─────────────────────────────────────────────────────────────────────
+# ── Clean binaries (always runs before every build) ───────────────────────────
 info "Cleaning previous build artefacts…"
-rm -rf build/__pycache__ dist/ build/pai.build/ 2>/dev/null || true
+
+_clean_item() {
+  local label="$1"; shift
+  rm -rf "$@" 2>/dev/null || true
+  printf "  ${GREEN}✓${RESET} %-28s removed\n" "${label}"
+}
+
+_clean_item "dist/"              dist/
+_clean_item "build/pai.build/"   build/pai.build/
+_clean_item "build/__pycache__/" build/__pycache__/
 find . -name "*.pyc" -path "*/build/*" -delete 2>/dev/null || true
+find . -name "*.spec.bak"        -delete 2>/dev/null || true
+# Also remove any platform-named binaries left from CI or previous runs
+find "${ROOT}/dist" -maxdepth 1 \
+  -name "pai-*" -o -name "*.sha256" 2>/dev/null | xargs rm -f 2>/dev/null || true
+
+# ── Optional: clean stale runtime data ────────────────────────────────────────
+if $CLEAN_DATA; then
+  info "Cleaning stale runtime data (--clean-data)…"
+  _clean_item "pai_data/rag/"          pai_data/rag/
+  _clean_item "pai_data/train_buffer/" pai_data/train_buffer/
+  _clean_item "pai_data/audit/"        pai_data/audit/
+  _clean_item "download_state.json"    pai_data/download_state.json
+  _clean_item "query.log"              pai_data/query.log
+  info "Models and adapters retained.  Use 'make clean-models' to remove them."
+fi
+
+ok "Clean complete."
 
 if $CLEAN_ONLY; then
-  ok "Clean done."
   exit 0
 fi
 

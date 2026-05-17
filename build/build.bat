@@ -5,8 +5,9 @@
 :: Creates: dist\pai.exe  — self-contained, no Python install required
 ::
 :: Usage:
-::   build\build.bat                 normal build
-::   build\build.bat --clean         remove artefacts only
+::   build\build.bat                   normal build (cleans old binaries first)
+::   build\build.bat --clean           remove build artefacts only
+::   build\build.bat --clean-data      also remove stale runtime cache data
 :: ══════════════════════════════════════════════════════════════════════════════
 setlocal enabledelayedexpansion
 
@@ -14,16 +15,39 @@ set ROOT=%~dp0..
 cd /d "%ROOT%"
 set BUILD_VENV=%ROOT%\.build_venv
 set BINARY=dist\pai.exe
+set CLEAN_ONLY=false
+set CLEAN_DATA=false
 
 for %%a in (%*) do (
-  if "%%a"=="--clean" (
-    echo [BUILD] Cleaning...
-    if exist dist   rmdir /s /q dist
-    if exist build\pai.build rmdir /s /q build\pai.build
-    echo [OK]   Clean done.
-    exit /b 0
-  )
+  if "%%a"=="--clean"      set CLEAN_ONLY=true
+  if "%%a"=="--clean-data" set CLEAN_DATA=true
 )
+
+:: ── Clean binaries (always runs before every build) ───────────────────────────
+echo [BUILD] Cleaning previous build artefacts...
+
+if exist dist                (rmdir /s /q dist              && echo   [OK] dist\ removed)
+if exist build\pai.build     (rmdir /s /q build\pai.build   && echo   [OK] build\pai.build\ removed)
+if exist build\__pycache__   (rmdir /s /q build\__pycache__ && echo   [OK] build\__pycache__\ removed)
+del /f /q build\*.spec.bak 2>nul
+:: Remove any platform-named binaries from CI runs
+for %%f in (dist\pai-*.exe dist\pai-*.sha256 dist\*.sha256) do (
+  if exist %%f (del /f /q %%f && echo   [OK] %%f removed)
+)
+
+:: ── Optional stale data cleanup ───────────────────────────────────────────────
+if "%CLEAN_DATA%"=="true" (
+  echo [BUILD] Cleaning stale runtime data --clean-data...
+  if exist pai_data\rag          rmdir /s /q pai_data\rag
+  if exist pai_data\train_buffer rmdir /s /q pai_data\train_buffer
+  if exist pai_data\audit        rmdir /s /q pai_data\audit
+  del /f /q pai_data\download_state.json 2>nul
+  del /f /q pai_data\query.log          2>nul
+  echo [OK] Stale cache data removed. Models retained.
+)
+
+echo [OK] Clean complete.
+if "%CLEAN_ONLY%"=="true" ( exit /b 0 )
 
 echo [BUILD] Linus PAI Native Binary Builder (Windows)
 echo.

@@ -112,33 +112,61 @@ def _pip(*pkgs: str, quiet: bool = True) -> None:
     subprocess.check_call(cmd)
 
 
+def _progress(step: int, total: int, msg: str) -> None:
+    """Print a progress line during installs.
+    Uses carriage-return overwrite in a TTY, plain newlines when piped/logged
+    so install.log stays readable instead of containing raw \\r bytes."""
+    import sys as _sys
+    bar = "█" * step + "░" * (total - step)
+    if _sys.stdout.isatty():
+        print(f"\r  [{bar}] {step}/{total}  {msg:<52}", end="", flush=True)
+        if step == total:
+            print()
+    else:
+        # Non-interactive (piped to a log): one clean line per step
+        print(f"  [{bar}] {step}/{total}  {msg}", flush=True)
+
+
 def bootstrap(force: bool = False) -> None:
     """Install all required packages.  Called once at startup."""
     marker = DATA_DIR / ".bootstrapped"
     if marker.exists() and not force:
         return
-    log.info("Bootstrapping PAI dependencies…")
-    _pip(*_BASE_PKGS)
 
-    # RAG embeddings: sentence-transformers requires torch which has no py3.13
-    # wheels yet.  Installation failure is non-fatal — RagStore falls back to
-    # keyword BM25-style search automatically when sentence-transformers is absent.
+    total_steps = 5
+    print(f"\n  Linus PAI — first-run setup (Python {sys.version.split()[0]})")
+    print(f"  Platform: {platform.system()} {platform.machine()}\n")
+
+    # Step 1: Core packages
+    _progress(1, total_steps, "Installing core packages…")
+    try:
+        _pip(*_BASE_PKGS)
+    except Exception as exc:
+        print(f"\n[ERR] Core package install failed: {exc}")
+        print("      Check your internet connection and try: pip install -r requirements.txt")
+        sys.exit(1)
+
+    # Step 2: RAG packages (non-fatal — keyword fallback is built in)
+    # sentence-transformers requires torch; torch has no py3.13 wheel.
+    _progress(2, total_steps, "Installing RAG / embeddings (torch + sentence-transformers)…")
     try:
         _pip(*_RAG_PKGS)
     except Exception as e:
-        log.warning(
-            f"sentence-transformers install failed ({e}). "
-            "RAG will use keyword search instead of cosine similarity. "
-            "Run with Python 3.12 for full embedding support."
-        )
+        print(f"\n  [warn] sentence-transformers skipped ({type(e).__name__}). "
+              "RAG uses keyword search instead of cosine similarity.")
 
-    plat = platform.system().lower()
+    plat    = platform.system().lower()
     machine = platform.machine().lower()
 
     # Apple Silicon → MLX (pure-Python Metal kernels)
     if plat == "darwin" and machine in ("arm64", "aarch64"):
-        _pip(*_MLX_PKGS)
-        # llama-cpp-python with Metal for GGUF god-model
+        _progress(3, total_steps, "Installing MLX (Apple Silicon Metal backend)…")
+        try:
+            _pip(*_MLX_PKGS)
+        except Exception as exc:
+            print(f"\n  [warn] MLX install failed: {exc}. Will use llama-cpp instead.")
+
+        _progress(4, total_steps, "Compiling llama-cpp-python with Metal GPU support…")
         env = os.environ.copy()
         env["CMAKE_ARGS"] = "-DGGML_METAL=on"
         subprocess.check_call(
@@ -160,19 +188,32 @@ def bootstrap(force: bool = False) -> None:
         elif vulkan_available:
             # AMD/Intel Vulkan compute — works on any Vulkan 1.1+ GPU
             env["CMAKE_ARGS"] = "-DGGML_VULKAN=on"
-        if cuda_available or rocm_available or vulkan_available:
-            subprocess.check_call(
-                [sys.executable, "-m", "pip", "install",
-                 "llama-cpp-python>=0.2.80", "--no-cache-dir", "-q"],
-                env=env,
-            )
-        else:
-            _pip("llama-cpp-python>=0.2.80")
+        gpu_tag = ("CUDA" if cuda_available else
+                   "ROCm" if rocm_available else
+                   "Vulkan" if vulkan_available else "CPU")
+        _progress(4, total_steps, f"Compiling llama-cpp-python ({gpu_tag})…")
+        try:
+            if cuda_available or rocm_available or vulkan_available:
+                subprocess.check_call(
+                    [sys.executable, "-m", "pip", "install",
+                     "llama-cpp-python>=0.2.80", "--no-cache-dir", "-q"],
+                    env=env,
+                )
+            else:
+                _pip("llama-cpp-python>=0.2.80")
+        except Exception as exc:
+            print(f"\n  [warn] llama-cpp-python compile failed: {exc}")
+            print("  Try: CMAKE_ARGS='-DGGML_METAL=on' pip install llama-cpp-python --no-cache-dir")
     else:
-        _pip("llama-cpp-python>=0.2.80")
+        _progress(4, total_steps, "Compiling llama-cpp-python (CPU)…")
+        try:
+            _pip("llama-cpp-python>=0.2.80")
+        except Exception as exc:
+            print(f"\n  [warn] llama-cpp-python failed: {exc}")
 
+    _progress(total_steps, total_steps, "Setup complete.")
+    print(f"\n  ✓ Linus PAI ready.  Run --doctor to verify.\n")
     marker.write_text(PAI_VERSION)
-    log.info("Bootstrap complete.")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -4240,9 +4281,49 @@ def main():
         log.warning("No sudo model — RAM too small; falling back to sized")
         sudo_spec = sized_spec
 
-    # ── List models (no download) ─────────────────────────────────────────────
+    # ── Early exits that need device info but NOT models ─────────────────────
+    # These run before any compilation or download so they are always fast.
+
     if args.list_models:
         print_models_table(dev, sudo_spec, sized_spec)
+        return
+
+    if args.status:
+        # Quick status — no subsystems required
+        import psutil
+        from rich.console import Console
+        th = ThermalGovernor()
+        th.start()
+        time.sleep(0.5)   # one poll cycle
+        dl_state: dict = {}
+        try:
+            dl_state = json.loads(_DOWNLOAD_STATE_FILE.read_text()) \
+                       if _DOWNLOAD_STATE_FILE.exists() else {}
+        except Exception:
+            pass
+        Console().print({
+            "version":   PAI_VERSION,
+            "device":    dev.platform,
+            "chip":      dev.chip_name or dev.gpu_name,
+            "ram_gb":    round(dev.ram_gb, 1),
+            "cpu_pct":   psutil.cpu_percent(interval=0.3),
+            "ram_pct":   psutil.virtual_memory().percent,
+            "thermal":   th.stats(),
+            "sudo_model":  sudo_spec.key  if sudo_spec  else None,
+            "sized_model": sized_spec.key if sized_spec else None,
+            "remote_available": [s.key for s in _AVAILABLE_REMOTE],
+            "downloads": dl_state,
+        })
+        th.stop()
+        return
+
+    if args.mesh:
+        from rich.console import Console
+        _mesh = MeshPeer(dev, api_port=args.port)
+        _mesh.start()
+        time.sleep(BEACON_INT + 2)
+        Console().print({"peers": [p.to_dict() for p in _mesh.live_peers()]})
+        _mesh.stop()
         return
 
     # ── One-time compilation ──────────────────────────────────────────────────
@@ -4286,28 +4367,6 @@ def main():
 
     # ── Banner ────────────────────────────────────────────────────────────────
     _print_banner(dev, sudo_spec, sized_spec)
-
-    # ── Status ────────────────────────────────────────────────────────────────
-    if args.status:
-        import psutil
-        from rich.console import Console
-        Console().print({
-            "version":  PAI_VERSION,
-            "device":   {k: v for k, v in dev.__dict__.items()},
-            "thermal":  thermal.stats(),
-            "sudo":     sudo_spec.key  if sudo_spec  else None,
-            "sized":    sized_spec.key if sized_spec else None,
-            "peers":    [p.to_dict() for p in mesh.live_peers()],
-            "cost":     _cost_tracker.stats(),
-        })
-        return
-
-    # ── Mesh ──────────────────────────────────────────────────────────────────
-    if args.mesh:
-        from rich.console import Console
-        time.sleep(BEACON_INT + 2)
-        Console().print({"peers": [p.to_dict() for p in mesh.live_peers()]})
-        return
 
     # ── Benchmark ─────────────────────────────────────────────────────────────
     if args.benchmark:

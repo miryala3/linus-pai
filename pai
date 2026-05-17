@@ -23,7 +23,22 @@ PAI_PYTHON_DIR="${PAI_HOME}/python"
 PAI_VENV_DIR="${PAI_HOME}/venv"
 PAI_LOCK="${PAI_HOME}/.bootstrap.lock"
 PAI_LOG="${PAI_HOME}/bootstrap.log"
-PAI_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve symlinks so that pai.py is found next to the real script,
+# not next to a symlink in ~/.local/bin/ that has no pai.py beside it.
+# Works on macOS (BSD readlink) and Linux (GNU readlink).
+_pai_resolve_self() {
+  local src="${BASH_SOURCE[0]}"
+  while [[ -L "$src" ]]; do
+    local link
+    link="$(readlink "$src")"
+    # Relative symlink — make it absolute relative to the symlink's dir
+    [[ "$link" != /* ]] && link="$(dirname "$src")/$link"
+    src="$link"
+  done
+  echo "$src"
+}
+PAI_REAL_SCRIPT="$(_pai_resolve_self)"
+PAI_SCRIPT_DIR="$(cd "$(dirname "${PAI_REAL_SCRIPT}")" && pwd)"
 PAI_SCRIPT="${PAI_SCRIPT_DIR}/pai.py"
 
 # Allow overriding the Python binary (skip embedded download)
@@ -163,6 +178,23 @@ _download_python() {
   ok "Embedded Python ${PAI_PYTHON_VERSION} ready at ${PAI_PYTHON_DIR}"
 }
 
+# ── Venv health checks ────────────────────────────────────────────────────────
+_venv_ok() {
+  [[ -x "${PAI_VENV_DIR}/bin/python3" ]] && \
+    "${PAI_VENV_DIR}/bin/python3" -c "import fastapi, uvicorn, rich" 2>/dev/null
+}
+
+_venv_corrupt() {
+  # Venv dir exists but Python binary is missing or crashes
+  [[ -d "${PAI_VENV_DIR}" ]] && ! [[ -x "${PAI_VENV_DIR}/bin/python3" ]]
+}
+
+_venv_repair() {
+  warn "Venv is corrupt or incomplete — removing and rebuilding…"
+  rm -rf "${PAI_VENV_DIR}"
+  ok "Removed corrupt venv. Re-bootstrapping…"
+}
+
 # ── Bootstrap venv and deps (runs once) ───────────────────────────────────────
 _bootstrap() {
   # Prevent concurrent bootstraps
@@ -171,70 +203,139 @@ _bootstrap() {
     lock_pid=$(cat "${PAI_LOCK}" 2>/dev/null || echo "")
     if [[ -n "$lock_pid" ]] && kill -0 "$lock_pid" 2>/dev/null; then
       warn "Another bootstrap is running (PID ${lock_pid}). Waiting…"
-      while [[ -e "${PAI_LOCK}" ]]; do sleep 2; done
+      local waited=0
+      while [[ -e "${PAI_LOCK}" ]]; do
+        sleep 2; waited=$((waited+2))
+        [[ $waited -gt 600 ]] && die "Bootstrap lock timed out (>10 min). Remove: ${PAI_LOCK}"
+      done
       return 0
     fi
     rm -f "${PAI_LOCK}"
   fi
 
   echo "$$" > "${PAI_LOCK}"
-  trap 'rm -f "${PAI_LOCK}"' EXIT
+  trap 'rm -f "${PAI_LOCK}"; echo ""' EXIT INT TERM
 
   local python="$1"
+  local vpython="${PAI_VENV_DIR}/bin/python3"
+  # Use a dedicated install log that is OVERWRITTEN each time bootstrap runs.
+  # This prevents the log from growing on every invocation and keeps it readable.
+  local INSTALL_LOG="${PAI_HOME}/install.log"
+  local ts
+  ts="$(date '+%Y-%m-%d %H:%M:%S')"
+
+  # Truncate install log and write a fresh header
+  {
+    echo "====================================================="
+    echo " Linus PAI bootstrap  ${ts}"
+    echo " Python: ${python}"
+    echo " Platform: ${OS} ${ARCH}"
+    echo "====================================================="
+  } > "${INSTALL_LOG}"
+
+  # bootstrap.log is append-only for errors/warnings only (no banner spam)
+  echo "[${ts}] Bootstrap started" >> "${PAI_LOG}"
 
   _banner
-  info "First-run bootstrap (this takes 5–15 min, only once)"
-  info "Log: ${PAI_LOG}"
+  info "First-run setup — this takes 5–15 minutes once, then instant."
+  info "Install log: ${INSTALL_LOG}"
   echo ""
 
-  # Create venv with embedded Python
-  info "Creating virtual environment…"
-  "$python" -m venv "${PAI_VENV_DIR}" 2>&1 | tee -a "${PAI_LOG}"
-  ok "venv created at ${PAI_VENV_DIR}"
+  # Step 1 — Create venv
+  info "[1/4] Creating virtual environment…"
+  if ! "$python" -m venv "${PAI_VENV_DIR}" >> "${INSTALL_LOG}" 2>&1; then
+    echo "[ERROR] venv creation failed — see ${INSTALL_LOG}" >> "${PAI_LOG}"
+    err "venv creation failed."
+    err "Log: ${INSTALL_LOG}"
+    err "Recovery: check disk space (need ≥ 2 GB) and Python version."
+    err "  Try: ${python} -m venv /tmp/test_venv"
+    die "Bootstrap aborted."
+  fi
+  ok "Virtual environment: ${PAI_VENV_DIR}"
 
-  local vpython="${PAI_VENV_DIR}/bin/python3"
+  # Step 2 — Upgrade pip (errors to install log only)
+  info "[2/4] Upgrading pip…"
+  "$vpython" -m pip install --upgrade pip wheel setuptools -q \
+    >> "${INSTALL_LOG}" 2>&1 || \
+    warn "pip upgrade failed — continuing anyway."
 
-  # Upgrade pip silently
-  "$vpython" -m pip install --upgrade pip wheel setuptools -q 2>>"${PAI_LOG}"
+  # Step 3 — Install deps
+  # stdout goes to terminal (user sees pai.py progress bars live)
+  # stderr goes to install log (pip warnings, compile output)
+  info "[3/4] Installing dependencies and compiling GPU backend…"
+  info "Platform: ${OS} ${ARCH}"
+  echo ""
+  if ! PAI_DATA_DIR="${PAI_HOME}/data" \
+       "$vpython" "${PAI_SCRIPT}" --install 2>>"${INSTALL_LOG}"; then
+    echo "[ERROR] Dependency install failed — see ${INSTALL_LOG}" >> "${PAI_LOG}"
+    err ""
+    err "Dependency install failed."
+    err "Log: ${INSTALL_LOG}"
+    err ""
+    err "Recovery options:"
+    err "  1. Re-run:   PAI_HOME=${PAI_HOME} ${PAI_REAL_SCRIPT} --force-install"
+    err "  2. Manual:   source ${PAI_VENV_DIR}/bin/activate && pip install -r requirements.txt"
+    err "  3. Doctor:   PAI_HOME=${PAI_HOME} ${PAI_REAL_SCRIPT} --doctor"
+    die "Bootstrap aborted."
+  fi
 
-  # Run pai.py --install (compiles llama-cpp for local GPU)
-  info "Installing Linus PAI dependencies and compiling GPU backend…"
-  info "Detecting: ${OS} ${ARCH}"
-  PAI_DATA_DIR="${PAI_HOME}/data" \
-    "$vpython" "${PAI_SCRIPT}" --install 2>&1 | tee -a "${PAI_LOG}"
+  # Step 4 — Verify
+  info "[4/4] Verifying installation…"
+  if ! _venv_ok; then
+    warn "Some packages may not have installed correctly."
+    warn "Run --doctor for a detailed check."
+  else
+    ok "Installation verified."
+  fi
 
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Bootstrap succeeded" >> "${PAI_LOG}"
   rm -f "${PAI_LOCK}"
-  trap - EXIT
+  trap - EXIT INT TERM
 
   echo ""
-  ok "Bootstrap complete! Linus PAI is ready."
+  ok "Linus PAI is ready!"
+  ok "Run: ${PAI_REAL_SCRIPT} --chat   or   ${PAI_REAL_SCRIPT} --doctor"
+  ok "Install log: ${INSTALL_LOG}"
   echo ""
-}
-
-# ── Verify venv has core packages ─────────────────────────────────────────────
-_venv_ok() {
-  "${PAI_VENV_DIR}/bin/python3" -c "import fastapi, uvicorn, rich" 2>/dev/null
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 main() {
-  # Find or download Python
+  # ── 1. Find or download Python ───────────────────────────────────────────────
   PYTHON="$(_find_python 2>/dev/null || true)"
 
   if [[ -z "${PYTHON}" ]]; then
+    info "No Python 3.10+ found on this system."
     _download_python
     PYTHON="${PY_BIN}"
   fi
 
-  # Bootstrap venv if not present or incomplete
+  # ── 2. Detect and repair corrupt venv ────────────────────────────────────────
+  if _venv_corrupt; then
+    _venv_repair
+  fi
+
+  # ── 3. Bootstrap venv if missing or incomplete ───────────────────────────────
   if ! _python_ok "${PAI_VENV_DIR}/bin/python3" || ! _venv_ok; then
     _bootstrap "${PYTHON}"
   fi
 
-  # Final Python to use
+  # ── 4. Final sanity check ─────────────────────────────────────────────────────
   VENV_PYTHON="${PAI_VENV_DIR}/bin/python3"
+  if ! [[ -x "${VENV_PYTHON}" ]]; then
+    err "venv Python not found at: ${VENV_PYTHON}"
+    err "Recovery: re-run this script (will rebuild venv automatically)"
+    err "  rm -rf ${PAI_VENV_DIR} && ${PAI_REAL_SCRIPT}"
+    exit 1
+  fi
+  if ! [[ -f "${PAI_SCRIPT}" ]]; then
+    err "pai.py not found at: ${PAI_SCRIPT}"
+    err "Recovery: re-clone the repo or re-download the binary"
+    err "  curl -Lo pai https://github.com/miryala3/linus-pai/releases/latest/download/pai-macos-x86_64"
+    exit 1
+  fi
 
-  # Launch pai.py with all arguments forwarded
+  # ── 5. Launch — forward all arguments ────────────────────────────────────────
   PAI_DATA_DIR="${PAI_HOME}/data" \
   exec "${VENV_PYTHON}" "${PAI_SCRIPT}" "$@"
 }
