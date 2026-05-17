@@ -2495,7 +2495,8 @@ with st.sidebar:
         st.caption(f"🌡 Thermal: **{th.get(\'state\',\'?\')}**  {th.get(\'temp_c\',0)}°C")
         # Model status — show spinner when a download/load is in progress
         dl = s.get("downloads", {})
-        loading = {k: v for k, v in dl.items() if v not in ("done", "error", None)}
+        loading = {k: v for k, v in dl.items()
+                   if (v.get("state") if isinstance(v, dict) else v) in ("downloading", "queued")}
         sudo_model = s.get("sudo_model") or "none"
         sized_model = s.get("sized_model") or "none"
         if loading:
@@ -2561,13 +2562,17 @@ with tab_chat:
     try:
         _s = requests.get(f"{API}/status", timeout=2).json()
         _dl = _s.get("downloads", {})
-        _loading = {k: v for k, v in _dl.items() if v not in ("done", "error", None)}
+        _loading = {k: v for k, v in _dl.items()
+                    if (v.get("state") if isinstance(v, dict) else v) in ("downloading", "queued")}
     except Exception:
         _loading = {}
 
     if _loading:
-        st.info(f"⏳ **Model loading** — `{', '.join(_loading.keys())}` is downloading/compiling. "
-                "Chat will be available once it\'s ready. Refresh the page to check.", icon="⏳")
+        parts = []
+        for k, v in _loading.items():
+            pct = v.get("pct", 0) if isinstance(v, dict) else 0
+            parts.append(f"`{k}` {pct:.0f}%" if pct else f"`{k}`")
+        st.info(f"⏳ **Downloading** — {', '.join(parts)}. Chat will be available once complete.", icon="⏳")
 
     for m in st.session_state.history:
         with st.chat_message(m["role"]):
