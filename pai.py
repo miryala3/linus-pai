@@ -2099,6 +2099,51 @@ class ThermalTrainer:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# ── FastAPI request models (module-level so Pydantic v2 TypeAdapter can resolve them) ──
+# Wrapped in try/except so pai.py can be imported pre-bootstrap when pydantic
+# is not yet installed (--install, --doctor, --status, etc. all still work).
+try:
+    from pydantic import BaseModel as _PBM
+
+    class GenReq(_PBM):
+        prompt:      str
+        model:       str   = "sudo"
+        max_tokens:  int   = 1024
+        temperature: float = 0.7
+        web_rag:     bool  = True
+        stream:      bool  = False
+
+    class AgentReq(_PBM):
+        task:      str
+        code_mode: bool = False
+        web_rag:   bool = True
+
+    class UploadDocReq(_PBM):
+        text:   str
+        source: str = "inline"
+
+    class _OAIMsg(_PBM):
+        role:    str = "user"
+        content: str
+
+    class _OAIChatReq(_PBM):
+        model:       str            = "pai-sudo"
+        messages:    List[_OAIMsg]
+        max_tokens:  Optional[int]  = 1024
+        temperature: float          = 0.7
+        stream:      bool           = False
+
+    class _OAICompReq(_PBM):
+        model:       str           = "pai-sudo"
+        prompt:      str
+        max_tokens:  Optional[int] = 1024
+        temperature: float         = 0.7
+        stream:      bool          = False
+
+except ImportError:
+    # pydantic not installed yet — placeholders; make_app() is only called post-bootstrap
+    GenReq = AgentReq = UploadDocReq = _OAIMsg = _OAIChatReq = _OAICompReq = None  # type: ignore
+
 # SECTION 10 · FastAPI Backend
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -2114,9 +2159,8 @@ def make_app(
     mesh: MeshPeer,
     trainer: ThermalTrainer,
 ):
-    from fastapi import FastAPI, HTTPException, UploadFile, File, Body
+    from fastapi import FastAPI, HTTPException, UploadFile, File
     from fastapi.middleware.cors import CORSMiddleware
-    from pydantic import BaseModel as PBM
 
     app = FastAPI(title="Linus PAI", version=PAI_VERSION)
     app.add_middleware(
@@ -2125,25 +2169,6 @@ def make_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    # ── Request / response models ─────────────────────────────────────────────
-
-    class GenReq(PBM):
-        prompt:      str
-        model:       str = "sudo"   # "sudo" | "sized" | "auto"
-        max_tokens:  int = 1024
-        temperature: float = 0.7
-        web_rag:     bool = True
-        stream:      bool = False
-
-    class AgentReq(PBM):
-        task:      str
-        code_mode: bool = False
-        web_rag:   bool = True
-
-    class UploadDocReq(PBM):
-        text:   str
-        source: str = "inline"
 
     # ── Route helpers ─────────────────────────────────────────────────────────
 
@@ -2199,7 +2224,7 @@ def make_app(
         }
 
     @app.post("/generate")
-    def generate(req: GenReq = Body(...)):
+    def generate(req: GenReq):
         trainer.touch()
         ctx = build_rag_context(rag, req.prompt, web=req.web_rag) if req.web_rag else ""
         full_prompt = f"{ctx}\n\nUser: {req.prompt}" if ctx else req.prompt
@@ -2221,7 +2246,7 @@ def make_app(
         return {"response": response, "model": spec.key}
 
     @app.post("/agent")
-    def agent_endpoint(req: AgentReq = Body(...)):
+    def agent_endpoint(req: AgentReq):
         trainer.touch()
         spec, path = _pick("sudo")
         if req.code_mode:
@@ -2232,7 +2257,7 @@ def make_app(
         return {"answer": answer}
 
     @app.post("/rag/add")
-    def rag_add(req: UploadDocReq = Body(...)):
+    def rag_add(req: UploadDocReq):
         count = rag.add_text(req.text, source=req.source)
         return {"chunks_added": count}
 
@@ -2327,24 +2352,6 @@ def make_app(
 
     from fastapi.responses import StreamingResponse as _SR
 
-    class _OAIMsg(PBM):
-        role:    str = "user"
-        content: str
-
-    class _OAIChatReq(PBM):
-        model:       str = "pai-sudo"
-        messages:    List[_OAIMsg]
-        max_tokens:  Optional[int] = 1024
-        temperature: float = 0.7
-        stream:      bool  = False
-
-    class _OAICompReq(PBM):
-        model:       str = "pai-sudo"
-        prompt:      str
-        max_tokens:  Optional[int] = 1024
-        temperature: float = 0.7
-        stream:      bool  = False
-
     @app.get("/v1/models")
     def oai_models():
         data = []
@@ -2357,7 +2364,7 @@ def make_app(
         return {"object": "list", "data": data}
 
     @app.post("/v1/chat/completions")
-    async def oai_chat(req: _OAIChatReq = Body(...)):
+    async def oai_chat(req: _OAIChatReq):
         spec, path = _pick("sudo" if "sudo" in req.model else "sized")
         prompt = "\n".join(f"{m.role.capitalize()}: {m.content}" for m in req.messages)
         trainer.touch()
@@ -2398,7 +2405,7 @@ def make_app(
         }
 
     @app.post("/v1/completions")
-    async def oai_completion(req: _OAICompReq = Body(...)):
+    async def oai_completion(req: _OAICompReq):
         """Legacy OpenAI completion endpoint."""
         spec, path = _pick("sudo" if "sudo" in req.model else "sized")
         trainer.touch()
