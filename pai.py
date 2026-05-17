@@ -1453,22 +1453,33 @@ class RagStore:
         self._embs = None   # invalidate cache
         return len(self._chunks)
 
-    def add_file(self, path: Path) -> int:
+    def add_file(self, path: Path, filename: str = "") -> int:
         suffix = path.suffix.lower()
+        source = filename or path.name
         if suffix == ".pdf":
             try:
                 import pypdf
                 reader = pypdf.PdfReader(str(path))
-                text = "\n".join(p.extract_text() or "" for p in reader.pages)
+                pages = []
+                for i, page in enumerate(reader.pages):
+                    try:
+                        pages.append(page.extract_text() or "")
+                    except Exception as e:
+                        log.warning(f"PDF page {i} extract failed ({source}): {e}")
+                text = "\n".join(pages)
             except Exception as e:
-                log.warning(f"PDF read failed {path}: {e}")
+                log.warning(f"PDF read failed ({source}): {e}")
                 return 0
         else:
             try:
                 text = path.read_text(errors="ignore")
-            except Exception:
+            except Exception as e:
+                log.warning(f"File read failed ({source}): {e}")
                 return 0
-        return self.add_text(text, source=str(path))
+        if not text.strip():
+            log.warning(f"No text extracted from {source} — possibly image-only PDF")
+            return 0
+        return self.add_text(text, source=source)
 
     def _build_embs(self) -> Optional[Any]:
         enc = self._get_encoder()
@@ -2218,13 +2229,23 @@ def make_app(
     async def rag_upload(file: UploadFile = File(...)):
         suffix = Path(file.filename).suffix.lower()
         fd, tmp = tempfile.mkstemp(suffix=suffix)
+        tmp_path = Path(tmp)
+        count = 0
         try:
             content = await file.read()
-            os.write(fd, content)
-            os.close(fd)
-            count = rag.add_file(Path(tmp))
+            try:
+                os.write(fd, content)
+            finally:
+                os.close(fd)   # always close fd regardless of write outcome
+            count = rag.add_file(tmp_path, filename=file.filename)
+        except Exception as exc:
+            log.error(f"rag_upload {file.filename}: {exc}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(exc))
         finally:
-            os.unlink(tmp)
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
         return {"filename": file.filename, "chunks_added": count}
 
     @app.post("/rag/search")
