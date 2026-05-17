@@ -14,9 +14,11 @@ PYTHON   ?= python3
 VENV     := .venv
 PY       := $(VENV)/bin/python
 PIP      := $(VENV)/bin/pip
+PAI_HOME ?= $(HOME)/.linus-pai
 
 .PHONY: all setup install test lint check run serve chat doctor bench demo \
-        build build-universal binary clean clean-all release help
+        build build-universal binary clean clean-binary clean-runtime \
+        clean-cache clean-models clean-data clean-all release help
 
 all: help
 
@@ -137,7 +139,12 @@ clean-models:    ## Remove downloaded model files (will re-download on next run)
 clean-data: clean-cache clean-models  ## Remove ALL pai_data (cache + models + adapters)
 	@echo "✓ All runtime data cleared.  pai_data/ is now empty."
 
-clean-all: clean clean-data  ## Nuclear: remove venv, binaries, ALL data
+clean-runtime:   ## Remove bootstrapped runtime (PAI_HOME=~/.linus-pai): venv, logs, pai.py copy
+	@echo "  Removing runtime directory $(PAI_HOME)…"
+	rm -rf "$(PAI_HOME)"
+	@echo "  ✓ $(PAI_HOME) removed — next run will re-bootstrap"
+
+clean-all: clean clean-data clean-runtime  ## Nuclear: remove dev venv, binaries, ALL data, AND runtime
 	rm -rf $(VENV)
 	@echo "✓ Full reset — re-run 'make setup' to reinstall"
 
