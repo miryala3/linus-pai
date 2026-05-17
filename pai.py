@@ -91,7 +91,7 @@ for _d in [DATA_DIR, MODELS_DIR, ADAPTERS_DIR, TRAIN_DIR, RAG_DIR, AUDIT_DIR, PL
 _BASE_PKGS = [
     "fastapi>=0.111", "uvicorn[standard]>=0.29",
     "pydantic>=2.0", "requests>=2.31",
-    "psutil>=5.9", "duckduckgo-search>=6.1",
+    "psutil>=5.9", "ddgs>=9.0",
     "huggingface_hub>=0.22", "tqdm>=4.66",
     "python-multipart>=0.0.9", "aiofiles>=23.2",
     "rich>=13.7", "pypdf>=4.2",
@@ -1422,7 +1422,7 @@ class RagStore:
 def ddgs_search(query: str, max_results: int = 5) -> List[Dict[str, str]]:
     """DuckDuckGo search; returns list of {title, url, body}."""
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
         with DDGS() as d:
             return list(d.text(query, max_results=max_results))
     except Exception as e:
@@ -1432,7 +1432,7 @@ def ddgs_search(query: str, max_results: int = 5) -> List[Dict[str, str]]:
 
 def ddgs_news(query: str, max_results: int = 5) -> List[Dict[str, str]]:
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
         with DDGS() as d:
             return list(d.news(query, max_results=max_results))
     except Exception as e:
@@ -2869,7 +2869,7 @@ def run_doctor() -> bool:
 
     # Core packages
     for pkg in ("psutil", "fastapi", "uvicorn", "streamlit", "rich",
-                "requests", "duckduckgo_search", "huggingface_hub",
+                "requests", "ddgs", "huggingface_hub",
                 "sentence_transformers", "pypdf"):
         try:
             mod = importlib.import_module(pkg.replace("-", "_").replace(".", "_"))

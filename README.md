@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/miryala3/linus-pai/actions/workflows/test.yml/badge.svg)](https://github.com/miryala3/linus-pai/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#platform-support)
 
 Linus PAI is a **single-file** Python runtime that auto-detects your hardware, downloads the best model for your device, and gives you a full AI stack — inference, RAG, web search, autonomous agents, thermal-gated training, and a mesh network — all in one command.
@@ -668,5 +668,5 @@ See [NOTICE](NOTICE) for third-party attributions and model license notes.
 [Rich](https://github.com/Textualize/rich) ·
 [HuggingFace Hub](https://huggingface.co) ·
 [sentence-transformers](https://www.sbert.net) ·
-[duckduckgo-search](https://github.com/deedy5/duckduckgo_search) ·
+[ddgs (https://github.com/deedy5/ddgs)/deedy5/ddgs) ·
 every researcher who published an open-weight model.

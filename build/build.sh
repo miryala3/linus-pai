@@ -103,9 +103,7 @@ if $UNIVERSAL && [[ "$OS" == "Darwin" ]]; then
   PYINSTALLER_ARGS+=("--target-arch" "universal2")
 fi
 
-if ! $USE_UPX; then
-  PYINSTALLER_ARGS+=("--noupx")
-fi
+# UPX is controlled inside pai.spec (upx=True/False) not via CLI flag when using a .spec file
 
 "${BUILD_VENV}/bin/pyinstaller" "${PYINSTALLER_ARGS[@]}"
 

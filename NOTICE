@@ -50,10 +50,10 @@ sentence-transformers
   Copyright: Nils Reimers and contributors
   https://www.sbert.net
 
-duckduckgo-search (ddgs)
+ddgs (ddgs)
   License: MIT
   Copyright: deedy5 and contributors
-  https://github.com/deedy5/duckduckgo_search
+  https://github.com/deedy5/ddgs
 
 ────────────────────────────────────────────────────────────────────────────────
 Models downloaded by this software are subject to their own licenses.

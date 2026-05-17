@@ -109,7 +109,9 @@ class TestModelSpec(unittest.TestCase):
         """All expected fields must exist on ModelSpec."""
         required = {"key", "engine", "repo_id", "filename", "check_file",
                     "size_gb", "params_b", "ctx", "description",
-                    "is_moe", "active_params_b"}
+                    "is_moe", "active_params_b",
+                    # Remote backend fields added when GPT/cloud support was introduced
+                    "remote", "api_base", "api_key_env", "api_model_id", "api_provider"}
         actual = {f.name for f in fields(self.aio.ModelSpec)}
         self.assertEqual(required, actual,
             f"Missing fields: {required - actual}, Extra: {actual - required}")
@@ -297,15 +299,18 @@ class TestModelSelection(unittest.TestCase):
 
     def test_large_device_prefers_moe(self):
         """
-        CRITIQUE: 128 GB Apple Silicon should pick Mixtral 8x22B (49 GB)
-        over Llama 70B (42 GB) because 8x22B is first in the MLX ladder.
+        CRITIQUE: 128 GB Apple Silicon should pick the first (largest) MoE
+        model in the MLX ladder — currently Llama 4 Scout (61 GB, 109B MoE).
+        If no API keys are set the remote ladder is empty, so the local ladder
+        is used and mlx-llama4-scout is first.
         """
         aio = self.aio
-        with patch.object(aio, "_scan_network_mounts", return_value=[]):
+        with patch.object(aio, "_scan_network_mounts", return_value=[]), \
+             patch.object(aio, "_AVAILABLE_REMOTE", []):
             sudo, _ = aio.select_models(self._dev(128.0, "apple_silicon"))
-        if sudo:
-            self.assertEqual(sudo.key, "mlx-moe-8x22b",
-                "128 GB Apple Silicon should pick Mixtral 8x22B MoE first")
+        if sudo and not sudo.remote:
+            self.assertEqual(sudo.key, "mlx-llama4-scout",
+                "128 GB Apple Silicon should pick Llama 4 Scout MoE (61 GB, top of ladder)")
 
     def test_sized_model_is_smallest(self):
         """
@@ -573,7 +578,8 @@ class TestDDGS(unittest.TestCase):
         CRITIQUE: If DDGS raises (network down, API change, rate limit),
         the entire query must not crash — return [] and log a warning.
         """
-        with patch("duckduckgo_search.DDGS.text", side_effect=Exception("Network error")):
+        # Patch the constructor so DDGS() itself raises — works across ddgs versions
+        with patch("ddgs.DDGS", side_effect=Exception("Network error")):
             results = self.aio.ddgs_search("test query")
         self.assertEqual(results, [])
 
@@ -811,6 +817,8 @@ class TestInferenceEngine(unittest.TestCase):
         spec.engine = engine
         spec.ctx    = 4096
         spec.key    = "test-model"
+        spec.remote = False   # MagicMock attributes are truthy by default;
+                              # remote=False ensures generate() takes the local path
         return spec
 
     def test_generate_blocked_during_emergency(self):
@@ -1070,16 +1078,16 @@ class TestScriptFiles(unittest.TestCase):
     BASE = AIO_DIR
 
     def test_runaio_sh_exists(self):
-        self.assertTrue((self.BASE / "runaio.sh").exists())
+        self.assertTrue((self.BASE / "runpai.sh").exists())
 
     def test_runaio_bat_exists(self):
-        self.assertTrue((self.BASE / "runaio.bat").exists())
+        self.assertTrue((self.BASE / "runpai.bat").exists())
 
     def test_stopaio_sh_exists(self):
-        self.assertTrue((self.BASE / "stopaio.sh").exists())
+        self.assertTrue((self.BASE / "stoppai.sh").exists())
 
     def test_stopaio_bat_exists(self):
-        self.assertTrue((self.BASE / "stopaio.bat").exists())
+        self.assertTrue((self.BASE / "stoppai.bat").exists())
 
     def test_license_exists(self):
         self.assertTrue((self.BASE / "LICENSE").exists())
@@ -1091,23 +1099,23 @@ class TestScriptFiles(unittest.TestCase):
 
     @unittest.skipUnless(platform.system() != "Windows", "Unix only")
     def test_sh_scripts_have_shebang(self):
-        for name in ("runaio.sh", "stopaio.sh"):
+        for name in ("runpai.sh", "stoppai.sh"):
             first = (self.BASE / name).read_text().splitlines()[0]
             self.assertTrue(first.startswith("#!"),
                 f"{name} must start with a shebang line")
 
     @unittest.skipUnless(platform.system() != "Windows", "Unix only")
     def test_pai_command_is_executable(self):
-        cmd = self.BASE / "scripts" / "AIO.command"
+        cmd = self.BASE / "scripts" / "LaunchPAI.command"
         if cmd.exists():
             self.assertTrue(os.access(cmd, os.X_OK),
-                "AIO.command must be chmod +x")
+                "LaunchPAI.command must be chmod +x")
 
     def test_scripts_dir_contents(self):
         scripts = self.BASE / "scripts"
         self.assertTrue(scripts.is_dir())
         names = {p.name for p in scripts.iterdir()}
-        expected = {"AIO.command", "StopAIO.command", "AIO.desktop",
+        expected = {"LaunchPAI.command", "StopPAI.command", "LinusPAI.desktop",
                     "install_desktop.sh", "install_desktop.bat"}
         self.assertEqual(expected, names & expected,
             f"scripts/ missing: {expected - names}")
