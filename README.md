@@ -71,25 +71,29 @@ First run                          Subsequent runs
   │                                  │
   ├─ Detect platform/arch            └─ Activate ~/.linus-pai/venv
   ├─ Find Python 3.10+ on system         exec pai.py --chat
+  │   (walks python3.12→3.11→3.10→3.13)
   │   └─ Not found?  Download
   │       python-build-standalone
   │       (~70 MB, one-time)
   ├─ Create ~/.linus-pai/venv
-  ├─ pai.py --install
+  ├─ pai.py --force-install
   │   ├─ Compile llama-cpp (Metal/
   │   │   CUDA/ROCm/Vulkan/CPU)
   │   └─ Install all Python deps
   └─ Launch pai.py
 ```
 
+The native binary (`dist/pai`) uses the same flow but finds a system Python for venv creation — `sys.executable` inside a PyInstaller bundle is the frozen binary, not a real interpreter.
+
 Files written to `~/.linus-pai/`:
 
 | Path | Contents |
 |---|---|
-| `python/` | Embedded Python 3.12 (if downloaded) |
+| `python/` | Embedded Python 3.12 (if downloaded by shell launcher) |
 | `venv/` | Virtual environment with all deps |
 | `data/` | Models, adapters, RAG index, plugins |
-| `bootstrap.log` | First-run log (check if setup fails) |
+| `install.log` | Full output of the last bootstrap run (overwritten each time) |
+| `bootstrap.log` | Append-only: timestamps + errors only — grep here if setup fails |
 
 Override defaults with environment variables:
 
@@ -171,7 +175,7 @@ See [SECURITY.md](SECURITY.md) for Gatekeeper notes and supply-chain details.
 - **Network mount scan** — finds GGUFs on `/Volumes`, `/mnt`, `/media` and uses them without re-downloading
 - **Remote GPT/cloud fallback** — set `OPENAI_API_KEY`, `GROQ_API_KEY` etc.; remote models auto-selected as sudo
 - **Reliable downloads** — 3-attempt retry with backoff · stall detection · `resume_download=True` · GGUF magic-byte integrity check · cascade to next model on failure · HuggingFace live scan for alternatives
-- **RAG** — ingest PDF/TXT/MD; cosine similarity retrieval; DuckDuckGo web search fused into every query
+- **RAG** — ingest multiple PDF/TXT/MD files at once; cosine similarity retrieval; DuckDuckGo web search fused into every query
 - **Agents** — ReAct loop with 10 built-in tools, Python sandbox, code agent (plan→write→test→fix)
 - **MCP server** — works as a local tool in Claude Code, Cursor, or any MCP host
 - **Thermal training** — idle-time LoRA fine-tuning on Apple Silicon, thermally gated (5-stage state machine)
@@ -186,7 +190,8 @@ See [SECURITY.md](SECURITY.md) for Gatekeeper notes and supply-chain details.
 | Platform | Backend | Status |
 |---|---|---|
 | Apple Silicon M1–M4 | MLX native Metal | ✅ |
-| Apple Intel Mac | llama-cpp CPU | ✅ |
+| Apple Intel Mac + AMD/Radeon GPU | llama-cpp Metal (GPU layers) | ✅ |
+| Apple Intel Mac (no discrete GPU) | llama-cpp CPU | ✅ |
 | Linux + NVIDIA GPU | llama-cpp CUDA | ✅ |
 | Linux + AMD GPU (RDNA2+) | llama-cpp ROCm/HIPBlas | ✅ |
 | Linux + any Vulkan 1.1+ GPU | llama-cpp Vulkan | ✅ |
@@ -195,6 +200,10 @@ See [SECURITY.md](SECURITY.md) for Gatekeeper notes and supply-chain details.
 | Windows + AMD Vulkan | llama-cpp Vulkan | ✅ |
 | Windows CPU | llama-cpp | ✅ |
 | Raspberry Pi / ARM Linux | llama-cpp CPU | ✅ (1B–3B models) |
+
+> **Intel Mac AMD GPU note** — Auto-detected via `system_profiler SPDisplaysDataType`.
+> llama-cpp-python is compiled with `-DGGML_METAL=on` so GPU layers run on the discrete Radeon.
+> Run `./pai --status` to confirm GPU name and VRAM are detected.
 
 ---
 
@@ -526,6 +535,20 @@ make demo       # scripted demo
 make stop       # stop running server
 ```
 
+### Cleaning
+
+```bash
+make clean          # remove caches, pyc files, build artefacts
+make clean-binary   # remove dist/ and PyInstaller work dirs only
+make clean-cache    # remove RAG index, training buffers, logs (safe — auto-rebuild)
+make clean-models   # remove downloaded model files (frees the most disk space)
+make clean-data     # clean-cache + clean-models
+make clean-runtime  # remove ~/.linus-pai (venv, logs, pai.py copy) — triggers full re-bootstrap
+make clean-all      # everything above + .venv  (full developer reset)
+```
+
+> `PAI_HOME` defaults to `~/.linus-pai`. Override: `PAI_HOME=/other/path make clean-runtime`
+
 ### Testing
 
 ```bash
@@ -668,5 +691,5 @@ See [NOTICE](NOTICE) for third-party attributions and model license notes.
 [Rich](https://github.com/Textualize/rich) ·
 [HuggingFace Hub](https://huggingface.co) ·
 [sentence-transformers](https://www.sbert.net) ·
-[ddgs (https://github.com/deedy5/ddgs)/deedy5/ddgs) ·
+[ddgs](https://github.com/deedy5/ddgs) ·
 every researcher who published an open-weight model.

@@ -40,7 +40,7 @@ it guards against.
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.12 (CI runs 3.12 only; 3.10/3.11 not tested)
 - **macOS**: `xcode-select --install && brew install cmake`
 - **Linux**: `sudo apt install cmake build-essential libopenblas-dev`
 - **Windows**: Visual Studio Build Tools 2022 (C++ workload), CMake 3.24+
@@ -59,8 +59,10 @@ Or manually:
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 pip install pytest ruff            # dev-only
-python pai.py --install            # compile llama-cpp for your GPU
+python pai.py --force-install      # compile llama-cpp for your GPU
 ```
+
+> Use `--force-install` (not `--install`) — it bypasses the `.bootstrapped` marker so all packages are reinstalled even if the marker exists from a previous partial run.
 
 ### Run
 
@@ -69,6 +71,18 @@ make run         # full system (API + Streamlit UI)
 make serve       # API only
 make chat        # terminal chat
 make doctor      # health check — run this first if something is wrong
+```
+
+### Cleaning
+
+```bash
+make clean          # remove caches, .pyc files, build artefacts
+make clean-binary   # remove dist/ and PyInstaller work dirs only
+make clean-cache    # remove RAG index, training buffers, logs (safe — auto-rebuild)
+make clean-models   # remove downloaded model files (frees the most disk space)
+make clean-data     # clean-cache + clean-models
+make clean-runtime  # remove ~/.linus-pai/ (venv + logs) — triggers full re-bootstrap on next run
+make clean-all      # everything above + dev .venv (full reset)
 ```
 
 ---
@@ -291,11 +305,16 @@ Output binary is `dist/pai` (~20–40 MB depending on platform and UPX compressi
 |---|---|
 | Python 3.12 interpreter | `mlx` / `mlx-lm` (Apple Silicon, ~150 MB) |
 | `pai.py` (as a data file) | `llama-cpp-python` with GPU backend |
-| Python stdlib | `fastapi`, `uvicorn`, `streamlit` |
-| `build/launcher.py` bootstrap logic | `sentence-transformers` |
+| Python stdlib | `fastapi`, `uvicorn`, `streamlit>=1.35` |
+| `build/launcher.py` bootstrap logic | `sentence-transformers`, `torch` |
 
 GPU-specific packages **must** be compiled for the local hardware at first launch.
 This is unavoidable — a pre-compiled llama-cpp-python for Metal would not run on CUDA.
+
+> **Important:** `sys.executable` inside a PyInstaller one-file binary is the frozen
+> bundle itself, not a real Python interpreter. The launcher uses `_find_system_python()`
+> to locate a real Python 3.10+ on PATH for `python -m venv`. If no system Python is
+> found, the user is directed to install one from python.org before the binary can bootstrap.
 
 ### Verifying a downloaded binary
 

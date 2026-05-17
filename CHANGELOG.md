@@ -8,17 +8,47 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed — Bootstrap reliability
+- **PyInstaller venv creation** — `sys.executable` inside a one-file PyInstaller bundle is the frozen binary itself, not a real Python interpreter; `dist/pai -m venv` failed instantly and silently every time. Replaced with `_find_system_python()` which walks `python3.12 → 3.11 → 3.10 → 3.13 → python3` on PATH to find a genuine interpreter.
+- **Bootstrap marker bypass** — launchers now call `pai.py --force-install` instead of `--install`; this bypasses the `.bootstrapped` marker file so a venv that was created but has missing packages (e.g. after adding `streamlit` to `_BASE_PKGS`) gets a proper reinstall rather than silently returning early.
+- **KeyboardInterrupt crash** — Ctrl+C during bootstrap produced a `[PYI-xxx:ERROR]` PyInstaller crash log instead of a clean exit. Added `try/except KeyboardInterrupt` around all three bootstrap subprocess calls (venv create, pip upgrade, `pai.py --force-install`) and around the `_bootstrap()` call site in `main()`.
+- **Bootstrap log spam** — `bootstrap.log` accumulated the full banner and all progress bytes (`\r` overwrites) on every invocation. Split into two logs: `install.log` (overwritten each bootstrap run — full install output) and `bootstrap.log` (append-only — timestamps and errors only).
+- **Progress bar in logs** — `_progress()` now checks `sys.stdout.isatty()` before using `\r` carriage-return overwrite; piped/log output gets clean newline-separated lines instead of garbage `\r` bytes.
+
+### Fixed — Package installation
+- **`streamlit` missing from `_BASE_PKGS`** — streamlit was used as the UI server but never installed during bootstrap, causing `No module named streamlit` on every launch. Added `streamlit>=1.35` to `_BASE_PKGS`.
+- **Venv health check gaps** — `_venv_ready()` (launcher.py) and `_venv_ok()` (shell `pai`) only checked `fastapi, uvicorn, rich` — missing streamlit meant a broken venv passed the health check. Both now include `streamlit` in the import test.
+
+### Fixed — Intel Mac AMD GPU
+- **GPU not detected** — Intel Mac x86_64 only queried `system_profiler SPHardwareDataType` (CPU info); the discrete AMD/Radeon GPU was invisible. Now also queries `SPDisplaysDataType` to read GPU name and VRAM (e.g. `Radeon Pro 555X, 4 GB`). Sets `device_plat = "metal"` when a discrete GPU is found.
+- **No Metal compilation on Intel Mac** — llama-cpp-python was only compiled with `-DGGML_METAL=on` for `arm64`. AMD Radeon GPUs on Intel Mac fully support Metal. Bootstrap now compiles llama-cpp with Metal for all macOS builds, with a graceful CPU fallback if Metal compilation fails.
+
+### Fixed — Frontend
+- **JSONDecodeError on API failure** — all `response.json()` calls in `pai_frontend.py` crashed with `JSONDecodeError: Expecting value` when the API returned an empty or non-JSON body. Added `_rj(r)` helper that returns `{}` on any parse error and shows a clean error message.
+- **Single-file RAG upload** — the file uploader only accepted one file at a time. Now uses `accept_multiple_files=True`; iterates all uploaded files, accumulates total chunk count, and shows per-file errors on failure.
+- **`--status` / `--mesh` hangs** — these early-exit commands triggered model download and GPU backend compilation before printing output. Both now exit before `check_compile_once()` and model download.
+
+### Added — Make targets
+- `clean-binary` — removes `dist/`, `build/pai.build/`, `build/__pycache__/`; runs automatically before every `make build`
+- `clean-cache` — removes RAG index, training buffers, audit logs (safe — auto-rebuild on next run)
+- `clean-models` — removes downloaded model files and adapters (frees the most disk space)
+- `clean-data` — `clean-cache` + `clean-models`
+- `clean-runtime` — removes `PAI_HOME` (`~/.linus-pai/`): venv, logs, stable `pai.py` copy; triggers a full re-bootstrap on next run
+- `clean-all` now includes `clean-runtime`; `PAI_HOME ?= $(HOME)/.linus-pai` overridable
+
 ### Added — Self-contained binary
 - `pai` — Unix self-bootstrapping launcher (macOS + Linux); no Python install required
   - Detects platform/arch → downloads `python-build-standalone` if no Python 3.10+ found
   - Stores embedded Python + venv in `~/.linus-pai/`; first-run bootstrap ~5–15 min, then instant
+  - Symlink-aware: resolves symlinks in `~/.local/bin/` so `pai.py` is always found next to the real script
   - Override: `PAI_HOME`, `PAI_PYTHON` environment variables
 - `pai.cmd` — Windows equivalent; uses PowerShell to download embedded Python
 - `build/launcher.py` — minimal PyInstaller entry point for compiling native binaries
 - `build/pai.spec` — PyInstaller spec (one-file, `optimize=2`, macOS `universal2` support)
-- `build/build.sh` / `build/build.bat` — native binary build scripts; `make build`
+- `build/build.sh` / `build/build.bat` — native binary build scripts; `make build`; clean all old binaries before each build; `--clean-data` flag for runtime cache cleanup
 - `build/entitlements.plist` — macOS Gatekeeper entitlements (JIT, Metal, network)
 - Updated `.github/workflows/release.yml` — matrix build for macOS arm64/x86_64 · Linux x86_64/arm64 · Windows x86_64; SHA-256 checksums attached to every release
+- Updated `.github/workflows/test.yml` — gate chain lint → syntax → test (Python 3.12 only); `shell: bash` on all steps
 - Updated `install.sh` — tries pre-built binary first (with checksum verification), falls back to source launcher
 - Updated `scripts/install_desktop.sh` — uses `pai` binary for shortcuts when present
 - Binary verification docs in `SECURITY.md` (checksum, Gatekeeper, supply-chain)
