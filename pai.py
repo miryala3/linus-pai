@@ -2473,20 +2473,30 @@ with st.sidebar:
     max_tokens = st.slider("Max tokens", 128, 4096, 1024, 128)
 
     st.divider()
-    with st.expander("Upload Document"):
-        uf = st.file_uploader("PDF / TXT / MD", type=["pdf","txt","md"])
+    with st.expander("📄 Upload Documents"):
         ufs = st.file_uploader("PDF / TXT / MD", type=["pdf","txt","md"], accept_multiple_files=True)
-        if ufs and st.button("Ingest"):
-            total = 0
+        if ufs and st.button("Ingest into RAG"):
+            if "ingested_docs" not in st.session_state:
+                st.session_state.ingested_docs = []
+            total, errors = 0, []
             for uf in ufs:
                 r = requests.post(f"{API}/rag/upload", files={"file": (uf.name, uf, uf.type)})
                 data = _rj(r)
                 if r.ok:
                     total += data.get("chunks_added", 0)
+                    st.session_state.ingested_docs.append(uf.name)
                 else:
-                    st.error(f"{uf.name}: {r.status_code} {data or r.text[:120]}")
-            if r.ok:
-                st.success(f"Ingested {len(ufs)} file(s) — {total} chunks added")
+                    errors.append(f"{uf.name}: HTTP {r.status_code} — {data.get(\'detail\') or r.text[:120]}")
+            if errors:
+                for err in errors:
+                    st.error(err)
+            if total:
+                st.success(f"✓ Ingested {len(ufs) - len(errors)} file(s) — {total} chunks added to RAG context")
+
+    # Show ingested doc count as a reminder
+    n_docs = len(st.session_state.get("ingested_docs", []))
+    if n_docs:
+        st.caption(f"📄 {n_docs} doc(s) in RAG context")
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 tab_chat, tab_status, tab_train = st.tabs(["💬 Chat", "📊 Status", "🎓 Train"])
@@ -2495,11 +2505,21 @@ with tab_chat:
     if "history" not in st.session_state:
         st.session_state.history = []
 
+    # Remind user if they ask about a document but haven't ingested anything
+    n_docs = len(st.session_state.get("ingested_docs", []))
+    if n_docs:
+        st.caption(f"📄 {n_docs} doc(s) in RAG context — {\', \'.join(st.session_state.ingested_docs[-3:])}")
+
     for m in st.session_state.history:
         with st.chat_message(m["role"]):
             st.markdown(m["content"])
 
-    if prompt := st.chat_input("Ask anything…"):
+    if prompt := st.chat_input("Ask anything… (upload docs in sidebar first to analyse them)"):
+        # Nudge user if they reference a document but haven\'t ingested
+        doc_keywords = ("document", "file", "pdf", "attached", "upload", "report", "analysis")
+        if any(kw in prompt.lower() for kw in doc_keywords) and n_docs == 0:
+            st.warning("No documents ingested yet. Use **Upload Documents** in the sidebar, then click **Ingest into RAG**.", icon="📄")
+
         st.session_state.history.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
@@ -2516,8 +2536,12 @@ with tab_chat:
                         "web_rag": web_rag,
                     }, timeout=120)
                     data = _rj(r)
-                    resp = data.get("response","[Error]")
-                    used = data.get("model","?")
+                    if not r.ok or not data.get("response"):
+                        err_detail = data.get("detail") or data.get("error") or r.text[:300] or f"HTTP {r.status_code}"
+                        resp = f"**API error:** {err_detail}"
+                    else:
+                        resp = data["response"]
+                    used = data.get("model", "?")
                     box.markdown(resp + f"\\n\\n*Model: {used}*")
                 else:
                     r = requests.post(f"{API}/agent", json={
@@ -2526,11 +2550,15 @@ with tab_chat:
                         "web_rag": web_rag,
                     }, timeout=300)
                     data = _rj(r)
-                    resp = data.get("answer","[Error]")
+                    if not r.ok or not data.get("answer"):
+                        err_detail = data.get("detail") or data.get("error") or r.text[:300] or f"HTTP {r.status_code}"
+                        resp = f"**API error:** {err_detail}"
+                    else:
+                        resp = data["answer"]
                     box.markdown(resp)
                 st.session_state.history.append({"role": "assistant", "content": resp})
             except Exception as e:
-                box.error(str(e))
+                box.error(f"Request failed: {e}")
 
 with tab_status:
     if st.button("Refresh"):
