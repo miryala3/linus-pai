@@ -159,22 +159,32 @@ def bootstrap(force: bool = False) -> None:
     plat    = platform.system().lower()
     machine = platform.machine().lower()
 
-    # Apple Silicon → MLX (pure-Python Metal kernels)
-    if plat == "darwin" and machine in ("arm64", "aarch64"):
-        _progress(3, total_steps, "Installing MLX (Apple Silicon Metal backend)…")
-        try:
-            _pip(*_MLX_PKGS)
-        except Exception as exc:
-            print(f"\n  [warn] MLX install failed: {exc}. Will use llama-cpp instead.")
+    # macOS → Metal for both Apple Silicon and Intel Mac AMD GPUs
+    if plat == "darwin":
+        if machine in ("arm64", "aarch64"):
+            _progress(3, total_steps, "Installing MLX (Apple Silicon Metal backend)…")
+            try:
+                _pip(*_MLX_PKGS)
+            except Exception as exc:
+                print(f"\n  [warn] MLX install failed: {exc}. Will use llama-cpp instead.")
+        else:
+            _progress(3, total_steps, "Intel Mac — skipping MLX (Apple Silicon only)…")
 
         _progress(4, total_steps, "Compiling llama-cpp-python with Metal GPU support…")
         env = os.environ.copy()
         env["CMAKE_ARGS"] = "-DGGML_METAL=on"
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install",
-             "llama-cpp-python>=0.2.80", "--no-cache-dir", "-q"],
-            env=env,
-        )
+        try:
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install",
+                 "llama-cpp-python>=0.2.80", "--no-cache-dir", "-q"],
+                env=env,
+            )
+        except Exception as exc:
+            print(f"\n  [warn] Metal llama-cpp-python failed: {exc}. Falling back to CPU build.")
+            try:
+                _pip("llama-cpp-python>=0.2.80")
+            except Exception:
+                pass
     elif plat in ("linux", "windows"):
         cuda_available = shutil.which("nvcc") is not None or os.path.exists("/usr/local/cuda")
         rocm_available = shutil.which("rocm-smi") is not None or os.path.exists("/opt/rocm")
@@ -281,7 +291,27 @@ def detect_device() -> DeviceProfile:
             gpu_name    = chip_name or "Apple GPU"
             device_plat = "apple_silicon"
         else:
-            device_plat = "cpu"
+            # Intel Mac — detect discrete GPU (AMD Radeon etc.) via DisplaysDataType
+            try:
+                disp_out = subprocess.check_output(
+                    ["system_profiler", "SPDisplaysDataType"], text=True, timeout=10
+                )
+                for line in disp_out.splitlines():
+                    line = line.strip()
+                    if "Chipset Model" in line:
+                        gpu_name = line.split(":", 1)[-1].strip()
+                    elif "VRAM" in line and ":" in line:
+                        vram_str = line.split(":", 1)[-1].strip()
+                        try:
+                            parts = vram_str.split()
+                            val   = float(parts[0].replace(",", ""))
+                            unit  = parts[1].upper() if len(parts) > 1 else "GB"
+                            gpu_vram_gb = val if "GB" in unit else val / 1024
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            device_plat = "metal" if gpu_vram_gb > 0 else "cpu"
 
     else:
         chip_name = platform.processor()
@@ -2395,6 +2425,13 @@ import requests, json, os, time, psutil
 
 API = os.getenv("PAI_API", "http://localhost:9480")
 
+def _rj(r):
+    """Safe response.json() — returns {} on empty or non-JSON body."""
+    try:
+        return r.json()
+    except Exception:
+        return {}
+
 st.set_page_config(page_title="Linus PAI · Local AI", layout="wide", page_icon="⚡")
 
 # ── Theme ────────────────────────────────────────────────────────────────────
@@ -2438,9 +2475,18 @@ with st.sidebar:
     st.divider()
     with st.expander("Upload Document"):
         uf = st.file_uploader("PDF / TXT / MD", type=["pdf","txt","md"])
-        if uf and st.button("Ingest"):
-            r = requests.post(f"{API}/rag/upload", files={"file": (uf.name, uf, uf.type)})
-            st.success(f"Chunks added: {r.json().get(\'chunks_added\',\'?\')}")
+        ufs = st.file_uploader("PDF / TXT / MD", type=["pdf","txt","md"], accept_multiple_files=True)
+        if ufs and st.button("Ingest"):
+            total = 0
+            for uf in ufs:
+                r = requests.post(f"{API}/rag/upload", files={"file": (uf.name, uf, uf.type)})
+                data = _rj(r)
+                if r.ok:
+                    total += data.get("chunks_added", 0)
+                else:
+                    st.error(f"{uf.name}: {r.status_code} {data or r.text[:120]}")
+            if r.ok:
+                st.success(f"Ingested {len(ufs)} file(s) — {total} chunks added")
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 tab_chat, tab_status, tab_train = st.tabs(["💬 Chat", "📊 Status", "🎓 Train"])
@@ -2468,17 +2514,19 @@ with tab_chat:
                         "model": model_sel,
                         "max_tokens": max_tokens,
                         "web_rag": web_rag,
-                    }, timeout=120).json()
-                    resp = r.get("response","[Error]")
-                    used = r.get("model","?")
+                    }, timeout=120)
+                    data = _rj(r)
+                    resp = data.get("response","[Error]")
+                    used = data.get("model","?")
                     box.markdown(resp + f"\\n\\n*Model: {used}*")
                 else:
                     r = requests.post(f"{API}/agent", json={
                         "task": prompt,
                         "code_mode": mode == "Code Agent",
                         "web_rag": web_rag,
-                    }, timeout=300).json()
-                    resp = r.get("answer","[Error]")
+                    }, timeout=300)
+                    data = _rj(r)
+                    resp = data.get("answer","[Error]")
                     box.markdown(resp)
                 st.session_state.history.append({"role": "assistant", "content": resp})
             except Exception as e:
@@ -2496,8 +2544,8 @@ with tab_status:
 with tab_train:
     st.caption("Thermal-gated LoRA fine-tune (Apple Silicon only)")
     if st.button("Trigger Training Cycle"):
-        r = requests.post(f"{API}/train/trigger", timeout=10).json()
-        st.info(r)
+        r = requests.post(f"{API}/train/trigger", timeout=10)
+        st.info(_rj(r) or r.text)
     buf_files = list((os.getenv("PAI_DATA_DIR", "pai_data") + "/train_buffer/").split())
     st.caption("Training buffers accumulate from every inference interaction.")
 '''
