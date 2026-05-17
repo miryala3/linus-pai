@@ -181,7 +181,7 @@ _download_python() {
 # ── Venv health checks ────────────────────────────────────────────────────────
 _venv_ok() {
   [[ -x "${PAI_VENV_DIR}/bin/python3" ]] && \
-    "${PAI_VENV_DIR}/bin/python3" -c "import fastapi, uvicorn, rich" 2>/dev/null
+    "${PAI_VENV_DIR}/bin/python3" -c "import fastapi, uvicorn, rich, streamlit" 2>/dev/null
 }
 
 _venv_corrupt() {
@@ -266,7 +266,7 @@ _bootstrap() {
   info "Platform: ${OS} ${ARCH}"
   echo ""
   if ! PAI_DATA_DIR="${PAI_HOME}/data" \
-       "$vpython" "${PAI_SCRIPT}" --install 2>>"${INSTALL_LOG}"; then
+       "$vpython" "${PAI_SCRIPT}" --force-install 2>>"${INSTALL_LOG}"; then
     echo "[ERROR] Dependency install failed — see ${INSTALL_LOG}" >> "${PAI_LOG}"
     err ""
     err "Dependency install failed."

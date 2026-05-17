@@ -144,7 +144,7 @@ def _venv_ready() -> bool:
         return False
     try:
         r = subprocess.run(
-            [str(py), "-c", "import fastapi, uvicorn, rich, psutil"],
+            [str(py), "-c", "import fastapi, uvicorn, rich, psutil, streamlit"],
             capture_output=True, timeout=15,
         )
         return r.returncode == 0
@@ -261,8 +261,11 @@ def _bootstrap(pai_py: Path) -> None:
     env = {**os.environ, "PAI_DATA_DIR": str(PAI_DATA_DIR)}
     try:
         with open(PAI_INSTALL_LOG, "a") as ilog:
+            # --force-install bypasses the bootstrap marker so that a venv that
+            # passed creation but is missing packages (e.g. streamlit added later)
+            # gets a full reinstall rather than silently returning early.
             r = subprocess.run(
-                [py, str(pai_py), "--install"],
+                [py, str(pai_py), "--force-install"],
                 env=env,
                 stdout=None,    # live progress to terminal
                 stderr=ilog,    # warnings/errors to install log only

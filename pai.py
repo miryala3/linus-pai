@@ -95,6 +95,7 @@ _BASE_PKGS = [
     "huggingface_hub>=0.22", "tqdm>=4.66",
     "python-multipart>=0.0.9", "aiofiles>=23.2",
     "rich>=13.7", "pypdf>=4.2",
+    "streamlit>=1.35",
 ]
 _MLX_PKGS   = ["mlx>=0.16", "mlx-lm>=0.16"]
 _GGUF_PKGS  = []   # compiled below per platform
