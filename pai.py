@@ -364,8 +364,10 @@ class ModelSpec:
 
     def label(self) -> str:
         tags = []
-        if self.is_moe:    tags.append("MoE")
-        if self.remote:    tags.append(f"Remote/{self.api_provider or 'API'}")
+        if self.is_moe:
+            tags.append("MoE")
+        if self.remote:
+            tags.append(f"Remote/{self.api_provider or 'API'}")
         suffix = f" [{', '.join(tags)}]" if tags else ""
         return self.description + suffix
 
@@ -1005,7 +1007,8 @@ class ThermalGovernor:
         xs = [p.ts - t0 for p in pts]
         ys = [p.temp_c for p in pts]
         n  = len(xs)
-        sx = sum(xs); sy = sum(ys)
+        sx = sum(xs)
+        sy = sum(ys)
         sxx = sum(x * x for x in xs)
         sxy = sum(x * y for x, y in zip(xs, ys))
         d   = n * sxx - sx * sx
@@ -2265,7 +2268,8 @@ def make_app(
                                         temperature=req.temperature)
         _cost_tracker.record(prompt, response_text)
         trainer.record_interaction(prompt, response_text)
-        inp_tok = len(prompt.split()); out_tok = len(response_text.split())
+        inp_tok = len(prompt.split())
+        out_tok = len(response_text.split())
         return {
             "id": msg_id, "object": "chat.completion",
             "created": created, "model": req.model,

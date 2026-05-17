@@ -70,7 +70,7 @@ class TestModuleImport(unittest.TestCase):
     def test_import_succeeds(self):
         """pai.py must import without raising any exception."""
         try:
-            aio = _import_aio()
+            _import_aio()
         except Exception as e:
             self.fail(f"import pai as aio raised: {e}")
 
@@ -913,7 +913,6 @@ class TestCLIArguments(unittest.TestCase):
 
     def _parse(self, *args):
         import argparse
-        aio = _import_aio()
         parser = argparse.ArgumentParser()
         parser.add_argument("--install",   action="store_true")
         parser.add_argument("--chat",      action="store_true")

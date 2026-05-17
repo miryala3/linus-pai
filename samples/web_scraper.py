@@ -99,7 +99,8 @@ def _extract_code(response: str) -> str:
 
 def _ensure_deps() -> None:
     try:
-        import requests, bs4
+        import requests
+        import bs4
     except ImportError:
         print("  Installing requests and beautifulsoup4…")
         subprocess.check_call([sys.executable, "-m", "pip", "install",
@@ -151,7 +152,7 @@ def main():
         html = _fetch_page(args.url)
         print(f" {len(html):,} chars")
         prompt = SCRAPE_PROMPT.format(url=args.url, html=html[:6000], want=args.want)
-        print(f"  Generating scraper…", end="", flush=True)
+        print("  Generating scraper…", end="", flush=True)
 
     code_raw = _call_pai(prompt)
     code     = _extract_code(code_raw)

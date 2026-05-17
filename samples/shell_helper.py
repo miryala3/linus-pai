@@ -148,13 +148,13 @@ def main():
         return
 
     if risk == "DANGEROUS" and not args.yes:
-        print(f"⚠  DANGEROUS operation. Type 'EXECUTE' to confirm, or press Enter to cancel:")
+        print("⚠  DANGEROUS operation. Type 'EXECUTE' to confirm, or press Enter to cancel:")
         confirm = input("> ").strip()
         if confirm != "EXECUTE":
             print("Cancelled.")
             return
     elif not args.yes and risk != "SAFE":
-        print(f"Run this command? [y/N] ", end="")
+        print("Run this command? [y/N] ", end="")
         ans = input().strip().lower()
         if ans not in ("y", "yes"):
             print("Cancelled.")

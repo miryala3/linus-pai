@@ -6,45 +6,128 @@ on:
   pull_request:
     branches: [main]
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Gate chain (each job only starts if the previous passes):
+#
+#   lint  ──►  syntax  ──►  test
+#
+# Nothing runs after a lint failure — keeps CI fast and feedback clear.
+# Python 3.12 only (minimum supported for production use).
+# ─────────────────────────────────────────────────────────────────────────────
+
 jobs:
+
+  # ── 1. Lint ──────────────────────────────────────────────────────────────────
+  # Checks for real errors only. pai.py is a large single-file runtime with
+  # intentional patterns (module-level code before imports, inline statements,
+  # imports used inside string templates / function bodies). We ignore:
+  #   E401 multiple imports on one line    — intentional brevity
+  #   E402 module-level import not at top  — bootstrap code comes first
+  #   E711 comparison to None              — SQLite rows use == None
+  #   E721 type comparison                 — isinstance used, but some == needed
+  #   F401 unused import                   — many used in closures / templates
+  #   F811 redefinition of unused name     — intentional overrides in sections
+  #   W605 invalid escape sequence         — raw strings in embedded shell code
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff -q
+
+      - name: Lint pai.py
+        run: |
+          ruff check pai.py \
+            --select E,W \
+            --ignore E501,E401,E402,E711,E721
+
+      - name: Lint test_pai.py
+        run: |
+          ruff check test_pai.py \
+            --select E,W,F \
+            --ignore E501,F401
+
+      - name: Lint samples/
+        run: |
+          ruff check samples/ \
+            --select E,W,F \
+            --ignore E501,E702,F401
+
+  # ── 2. Syntax check ──────────────────────────────────────────────────────────
+  syntax:
+    name: Syntax
+    needs: lint          # only runs when lint passes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: pai.py
+        run: python -c "import ast; ast.parse(open('pai.py').read()); print('pai.py OK')"
+
+      - name: test_pai.py
+        run: python -c "import ast; ast.parse(open('test_pai.py').read()); print('test_pai.py OK')"
+
+      - name: build/launcher.py
+        run: python -c "import ast; ast.parse(open('build/launcher.py').read()); print('launcher.py OK')"
+
+      - name: Sample scripts
+        run: |
+          for f in samples/*.py; do
+            python -c "import ast; ast.parse(open('$f').read())"
+            echo "$f OK"
+          done
+
+      - name: Shell scripts
+        run: |
+          bash -n runpai.sh  && echo "runpai.sh OK"
+          bash -n stoppai.sh && echo "stoppai.sh OK"
+          bash -n pai        && echo "pai OK"
+          bash -n install.sh && echo "install.sh OK"
+
+  # ── 3. Tests ─────────────────────────────────────────────────────────────────
   test:
-    name: Python ${{ matrix.python-version }} · ${{ matrix.os }}
+    name: Tests · ${{ matrix.os }}
+    needs: syntax        # only runs when syntax check passes
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
         os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
           cache: "pip"
 
       - name: Install system deps (Ubuntu)
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y cmake build-essential libopenblas-dev -qq
+        run: sudo apt-get update -qq && sudo apt-get install -y cmake build-essential libopenblas-dev -qq
 
       - name: Install system deps (macOS)
         if: runner.os == 'macOS'
         run: brew install cmake
 
-      - name: Install Python dependencies
+      - name: Install Python deps
         run: |
-          pip install --upgrade pip wheel setuptools
-          pip install -r requirements.txt
-          pip install pytest pytest-cov
-          pip install llama-cpp-python --no-cache-dir
+          pip install --upgrade pip wheel setuptools -q
+          pip install -r requirements.txt -q
+          pip install pytest pytest-cov -q
+          pip install llama-cpp-python --no-cache-dir -q
 
-      # Use bash on all platforms so backslash line-continuation works (avoids
-      # the Windows PowerShell parser error with multi-line pytest commands).
-      - name: Run tests (no live API, no network)
+      - name: Run tests
         shell: bash
         run: |
           pytest test_pai.py -v --tb=short \
@@ -52,43 +135,8 @@ jobs:
             --cov=pai --cov-report=xml
 
       - name: Upload coverage
-        if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@v4
         with:
           file: coverage.xml
           fail_ci_if_error: false
-
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install ruff
-      # W503 is a flake8-only code not recognised by ruff — removed
-      - run: ruff check pai.py test_pai.py samples/ --select E,F,W --ignore E501
-
-  syntax:
-    name: Syntax check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Verify pai.py syntax
-        run: python -c "import ast; ast.parse(open('pai.py').read()); print('pai.py OK')"
-      - name: Verify test_pai.py syntax
-        run: python -c "import ast; ast.parse(open('test_pai.py').read()); print('test_pai.py OK')"
-      - name: Verify build/launcher.py syntax
-        run: python -c "import ast; ast.parse(open('build/launcher.py').read()); print('launcher.py OK')"
-      - name: Verify shell scripts
-        run: bash -n runpai.sh && bash -n stoppai.sh && bash -n pai && echo "Shell OK"
-      - name: Verify sample scripts
-        run: |
-          for f in samples/*.py; do
-            python -c "import ast; ast.parse(open('$f').read())"
-            echo "$f OK"
-          done

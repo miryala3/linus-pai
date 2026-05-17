@@ -39,6 +39,12 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building release v$VERSION"
 
+      - name: Lint (gate — builds only start if this passes)
+        run: |
+          pip install ruff -q
+          ruff check pai.py --select E,W --ignore E501,E401,E402,E711,E721
+          ruff check test_pai.py samples/ --select E,W,F --ignore E501,E702,F401
+
       - name: Syntax check
         run: |
           python -c "import ast; ast.parse(open('pai.py').read()); print('pai.py OK')"
@@ -46,14 +52,12 @@ jobs:
           bash -n pai && echo "pai OK"
           bash -n runpai.sh && echo "runpai.sh OK"
 
-      - name: Quick tests
+      - name: Tests (Python 3.12, CPU-only)
         run: |
           pip install -r requirements.txt -q
           pip install pytest -q
-          pip install llama-cpp-python -q   # CPU-only for CI
-          pytest test_pai.py -v \
-            -k "not Live and not Network" \
-            --tb=short -q
+          pip install llama-cpp-python --no-cache-dir -q
+          pytest test_pai.py -v -k "not Live and not Network" --tb=short -q
 
       - name: Extract changelog section
         id: changelog
