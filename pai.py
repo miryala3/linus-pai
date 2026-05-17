@@ -13,14 +13,14 @@ Exo-style mesh: UDP peer discovery + HTTP pipeline sharding across LAN nodes.
 
 Usage
 -----
-  python aio.py                     auto-detect and launch web UI
-  python aio.py --install           install deps only, no server
-  python aio.py --chat              interactive terminal chat
-  python aio.py --agent "task"      run one-shot autonomous agent task
-  python aio.py --train             thermal-throttled LoRA fine-tune cycle
-  python aio.py --mesh              start mesh relay node
-  python aio.py --serve             backend API only (no UI)
-  python aio.py --status            print device/thermal/model status
+  python pai.py                     auto-detect and launch web UI
+  python pai.py --install           install deps only, no server
+  python pai.py --chat              interactive terminal chat
+  python pai.py --agent "task"      run one-shot autonomous agent task
+  python pai.py --train             thermal-throttled LoRA fine-tune cycle
+  python pai.py --mesh              start mesh relay node
+  python pai.py --serve             backend API only (no UI)
+  python pai.py --status            print device/thermal/model status
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%H:%M:%S",
 )
-log = logging.getLogger("aio")
+log = logging.getLogger("pai")
 
 PAI_VERSION = "1.0.0"
 BASE_DIR    = Path(__file__).parent.resolve()
@@ -2113,7 +2113,7 @@ def make_app(
     mesh: MeshPeer,
     trainer: ThermalTrainer,
 ):
-    from fastapi import FastAPI, HTTPException, UploadFile, File
+    from fastapi import FastAPI, HTTPException, UploadFile, File, Body
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel as PBM
 
@@ -2188,7 +2188,7 @@ def make_app(
         }
 
     @app.post("/generate")
-    def generate(req: GenReq):
+    def generate(req: GenReq = Body(...)):
         trainer.touch()
         ctx = build_rag_context(rag, req.prompt, web=req.web_rag) if req.web_rag else ""
         full_prompt = f"{ctx}\n\nUser: {req.prompt}" if ctx else req.prompt
@@ -2210,7 +2210,7 @@ def make_app(
         return {"response": response, "model": spec.key}
 
     @app.post("/agent")
-    def agent_endpoint(req: AgentReq):
+    def agent_endpoint(req: AgentReq = Body(...)):
         trainer.touch()
         spec, path = _pick("sudo")
         if req.code_mode:
@@ -2221,7 +2221,7 @@ def make_app(
         return {"answer": answer}
 
     @app.post("/rag/add")
-    def rag_add(req: UploadDocReq):
+    def rag_add(req: UploadDocReq = Body(...)):
         count = rag.add_text(req.text, source=req.source)
         return {"chunks_added": count}
 
@@ -2321,14 +2321,14 @@ def make_app(
         content: str
 
     class _OAIChatReq(PBM):
-        model:       str = "aio-sudo"
+        model:       str = "pai-sudo"
         messages:    List[_OAIMsg]
         max_tokens:  Optional[int] = 1024
         temperature: float = 0.7
         stream:      bool  = False
 
     class _OAICompReq(PBM):
-        model:       str = "aio-sudo"
+        model:       str = "pai-sudo"
         prompt:      str
         max_tokens:  Optional[int] = 1024
         temperature: float = 0.7
@@ -2338,15 +2338,15 @@ def make_app(
     def oai_models():
         data = []
         if sudo_spec:
-            data.append({"id": "aio-sudo",  "object": "model", "owned_by": "aio",
+            data.append({"id": "pai-sudo",  "object": "model", "owned_by": "linus-pai",
                           "description": sudo_spec.label(),  "is_moe": sudo_spec.is_moe})
         if sized_spec:
-            data.append({"id": "aio-sized", "object": "model", "owned_by": "aio",
+            data.append({"id": "pai-sized", "object": "model", "owned_by": "linus-pai",
                           "description": sized_spec.label(), "is_moe": sized_spec.is_moe})
         return {"object": "list", "data": data}
 
     @app.post("/v1/chat/completions")
-    async def oai_chat(req: _OAIChatReq):
+    async def oai_chat(req: _OAIChatReq = Body(...)):
         spec, path = _pick("sudo" if "sudo" in req.model else "sized")
         prompt = "\n".join(f"{m.role.capitalize()}: {m.content}" for m in req.messages)
         trainer.touch()
@@ -2387,7 +2387,7 @@ def make_app(
         }
 
     @app.post("/v1/completions")
-    async def oai_completion(req: _OAICompReq):
+    async def oai_completion(req: _OAICompReq = Body(...)):
         """Legacy OpenAI completion endpoint."""
         spec, path = _pick("sudo" if "sudo" in req.model else "sized")
         trainer.touch()
@@ -2475,8 +2475,17 @@ with st.sidebar:
         col1.metric("CPU", f"{s.get(\'cpu_pct\',0):.0f}%")
         col2.metric("RAM", f"{s.get(\'ram_used_pct\',0):.0f}%")
         st.caption(f"🌡 Thermal: **{th.get(\'state\',\'?\')}**  {th.get(\'temp_c\',0)}°C")
-        st.caption(f"🔮 Sudo: `{s.get(\'sudo_model\',\'none\')}`")
-        st.caption(f"⚡ Sized: `{s.get(\'sized_model\',\'none\')}`")
+        # Model status — show spinner when a download/load is in progress
+        dl = s.get("downloads", {})
+        loading = {k: v for k, v in dl.items() if v not in ("done", "error", None)}
+        sudo_model = s.get("sudo_model") or "none"
+        sized_model = s.get("sized_model") or "none"
+        if loading:
+            keys = ", ".join(loading.keys())
+            st.caption(f"⏳ Loading: `{keys}` — please wait…")
+        else:
+            st.caption(f"🔮 Sudo: `{sudo_model}`")
+            st.caption(f"⚡ Sized: `{sized_model}`")
         peers = s.get("peers", [])
         if peers:
             st.divider()
@@ -2793,7 +2802,7 @@ def run_mcp_server(
 ) -> None:
     """
     MCP stdio server.  Add to Claude Code .claude/settings.json:
-      {"mcpServers": {"aio": {"command": "python", "args": ["aio.py", "--mcp"]}}}
+      {"mcpServers": {"linus-pai": {"command": "python", "args": ["pai.py", "--mcp"]}}}
     """
     import psutil as _psu
 
@@ -3048,7 +3057,7 @@ def run_doctor() -> bool:
         import llama_cpp
         chk("llama-cpp-python", True, getattr(llama_cpp, "__version__", "ok"))
     except ImportError:
-        chk("llama-cpp-python", False, "python aio.py --force-install")
+        chk("llama-cpp-python", False, "python pai.py --force-install")
 
     # MLX (Apple Silicon)
     if platform.system() == "Darwin" and platform.machine() in ("arm64", "aarch64"):
@@ -3124,7 +3133,7 @@ def run_doctor() -> bool:
     if marker.exists():
         chk("llama backend compiled", True, marker.read_text().strip())
     else:
-        chk("llama backend compiled", False, "run: python aio.py --force-install")
+        chk("llama backend compiled", False, "run: python pai.py --force-install")
 
     # Model integrity for every file already on disk
     all_ladders = _MLX_LADDER + _GGUF_LADDER
@@ -3427,7 +3436,7 @@ def run_demo(
         f"UI  → http://localhost:8501\n"
         f"API → http://localhost:{MESH_PORT}/docs\n"
         f"OpenAI-compatible → http://localhost:{MESH_PORT}/v1/\n"
-        f"MCP for Claude Code → python aio.py --mcp",
+        f"MCP for Claude Code → python pai.py --mcp",
         border_style="green",
     ))
 
@@ -4081,7 +4090,7 @@ def ensure_model_animated(spec: "ModelSpec") -> Path:
     if result is None:
         raise RuntimeError(
             f"Download failed for {spec.key} after {DownloadManager.MAX_RETRIES} attempts. "
-            f"Check ~/.aio/logs/ for details."
+            f"Check ~/.linus-pai/logs/ for details."
         )
     return result
 
@@ -4305,18 +4314,18 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent("""\
           Examples:
-            python aio.py                        # auto-detect + launch full system
-            python aio.py --chat                 # terminal chat
-            python aio.py --serve                # API only (no Streamlit)
-            python aio.py --dashboard            # live terminal dashboard
-            python aio.py --mcp                  # MCP server for Claude Code
-            python aio.py --benchmark            # run performance benchmark
-            python aio.py --doctor               # system health check
-            python aio.py --demo                 # scripted demo
-            python aio.py --list-models          # show all available models
-            python aio.py --update               # self-update from GitHub
-            python aio.py --agent "summarise the latest AI news"
-            python aio.py --code  "write a todo-list API in FastAPI"
+            python pai.py                        # auto-detect + launch full system
+            python pai.py --chat                 # terminal chat
+            python pai.py --serve                # API only (no Streamlit)
+            python pai.py --dashboard            # live terminal dashboard
+            python pai.py --mcp                  # MCP server for Claude Code
+            python pai.py --benchmark            # run performance benchmark
+            python pai.py --doctor               # system health check
+            python pai.py --demo                 # scripted demo
+            python pai.py --list-models          # show all available models
+            python pai.py --update               # self-update from GitHub
+            python pai.py --agent "summarise the latest AI news"
+            python pai.py --code  "write a todo-list API in FastAPI"
         """),
     )
 
@@ -4351,7 +4360,7 @@ def main():
 
     # ── Update URL override ───────────────────────────────────────────────────
     parser.add_argument("--update-url", metavar="URL", default=PAI_UPDATE_URL,
-                        help="URL to fetch aio.py update from")
+                        help="URL to fetch pai.py update from")
 
     args = parser.parse_args()
 
@@ -4555,12 +4564,12 @@ def main():
     log.info(f"API: http://localhost:{args.port}/docs")
     log.info(f"OpenAI-compat: http://localhost:{args.port}/v1/")
     if args.mcp:
-        log.info(f"MCP: python aio.py --mcp")
+        log.info(f"MCP: python pai.py --mcp")
 
     # Write PID file
-    _pid_dir  = Path.home() / ".aio"
+    _pid_dir  = Path.home() / ".linus-pai"
     _pid_dir.mkdir(exist_ok=True)
-    _pid_file = _pid_dir / "aio.pids"
+    _pid_file = _pid_dir / "pai.pids"
     _pids = [str(os.getpid())]
     if fe_proc:
         _pids.append(str(fe_proc.pid))
