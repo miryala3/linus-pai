@@ -223,7 +223,8 @@ def bootstrap(force: bool = False) -> None:
             print(f"\n  [warn] llama-cpp-python failed: {exc}")
 
     _progress(total_steps, total_steps, "Setup complete.")
-    print(f"\n  ✓ Linus PAI ready.  Run --doctor to verify.\n")
+    print(f"\n  ✓ Dependencies installed. Starting Linus PAI…\n")
+    print(f"  Tip: run 'python pai.py --doctor' any time to check system health.\n")
     marker.write_text(PAI_VERSION)
 
 
@@ -2147,13 +2148,23 @@ def make_app(
     # ── Route helpers ─────────────────────────────────────────────────────────
 
     def _pick(model_key: str) -> Tuple[ModelSpec, Path]:
-        if model_key == "sized" and sized_spec and sized_path:
+        def _ready(spec, path) -> bool:
+            if not spec or not path:
+                return False
+            if spec.remote:
+                return True          # remote models are always "ready"
+            if not path.exists():
+                raise HTTPException(503,
+                    f"Model '{spec.key}' is still downloading — please wait a moment and try again.")
+            return True
+
+        if model_key == "sized" and _ready(sized_spec, sized_path):
             return sized_spec, sized_path
-        if sudo_spec and sudo_path:
+        if _ready(sudo_spec, sudo_path):
             return sudo_spec, sudo_path
-        if sized_spec and sized_path:
+        if _ready(sized_spec, sized_path):
             return sized_spec, sized_path
-        raise HTTPException(503, "No model loaded")
+        raise HTTPException(503, "No model loaded yet — startup is still in progress.")
 
     def _auto_pick(prompt: str) -> Tuple[ModelSpec, Path]:
         simple = len(prompt) < 120 and not any(
@@ -2535,16 +2546,28 @@ with tab_chat:
     if "history" not in st.session_state:
         st.session_state.history = []
 
-    # Remind user if they ask about a document but haven't ingested anything
     n_docs = len(st.session_state.get("ingested_docs", []))
     if n_docs:
         st.caption(f"📄 {n_docs} doc(s) in RAG context — {\', \'.join(st.session_state.ingested_docs[-3:])}")
+
+    # Check loading state to show a banner and disable input
+    try:
+        _s = requests.get(f"{API}/status", timeout=2).json()
+        _dl = _s.get("downloads", {})
+        _loading = {k: v for k, v in _dl.items() if v not in ("done", "error", None)}
+    except Exception:
+        _loading = {}
+
+    if _loading:
+        st.info(f"⏳ **Model loading** — `{', '.join(_loading.keys())}` is downloading/compiling. "
+                "Chat will be available once it\'s ready. Refresh the page to check.", icon="⏳")
 
     for m in st.session_state.history:
         with st.chat_message(m["role"]):
             st.markdown(m["content"])
 
-    if prompt := st.chat_input("Ask anything… (upload docs in sidebar first to analyse them)"):
+    _chat_placeholder = "Model is loading — please wait…" if _loading else "Ask anything… (upload docs in sidebar first to analyse them)"
+    if prompt := st.chat_input(_chat_placeholder, disabled=bool(_loading)):
         # Nudge user if they reference a document but haven\'t ingested
         doc_keywords = ("document", "file", "pdf", "attached", "upload", "report", "analysis")
         if any(kw in prompt.lower() for kw in doc_keywords) and n_docs == 0:
