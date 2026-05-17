@@ -64,6 +64,13 @@ jobs:
           echo "Release notes:"
           cat release_notes.txt
 
+      - name: Upload release notes artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release_notes.txt
+          retention-days: 1
+
   # ── 2. Build native binaries (matrix) ───────────────────────────────────────
   build:
     name: Build ${{ matrix.name }}
@@ -203,14 +210,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: .
+
       - name: Download all binaries
         uses: actions/download-artifact@v4
         with:
           path: dist/
           merge-multiple: true
+          pattern: pai-*
 
       - name: List release assets
-        run: ls -lh dist/
+        run: ls -lh dist/ && cat release_notes.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS entitlements for Linus PAI binary (used during code signing).
+  Required for Gatekeeper notarisation on macOS 10.14+.
+-->
+<plist version="1.0">
+<dict>
+  <!-- Allow JIT compilation (needed by llama.cpp Metal kernels) -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+
+  <!-- Allow unsigned executable memory (needed by some ML runtimes) -->
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+
+  <!-- Allow DYLD environment variables (needed by PyInstaller loader) -->
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+
+  <!-- Network access (for HuggingFace model downloads + web search) -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+
+  <!-- File system read access -->
+  <key>com.apple.security.files.user-selected.read-write</key>
+  <true/>
+</dict>
+</plist>

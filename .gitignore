@@ -11,7 +11,8 @@ __pycache__/
 *.egg-info/
 .eggs/
 dist/
-build/
+# Keep build/ source files (launcher.py, pai.spec, build.sh, etc.)
+# Only exclude PyInstaller output subdirectories — see Binary build section below
 *.whl
 pip-wheel-metadata/
 MANIFEST
