@@ -1019,10 +1019,13 @@ class ThermalGovernor:
 
     def _loop(self) -> None:
         while self._running:
-            t = self._read()
-            if t is not None:
-                self._history.append(ThermalReading(t, time.time(), platform.system()))
-                self._evaluate(t)
+            try:
+                t = self._read()
+                if t is not None:
+                    self._history.append(ThermalReading(t, time.time(), platform.system()))
+                    self._evaluate(t)
+            except Exception as e:
+                log.debug(f"Thermal loop error: {e}")
             time.sleep(self._poll_s)
 
     def _read(self) -> Optional[float]:
@@ -2042,26 +2045,30 @@ class ThermalTrainer:
     def _loop(self) -> None:
         while self._running:
             time.sleep(60)
-            idle_s = time.time() - self._last_active
-            if idle_s < self.IDLE_BEFORE_TRAIN:
-                continue
-            if self._thermal.state > ThermalState.WARM:
-                continue
-            buf_files = list(TRAIN_DIR.glob("*_buffer.jsonl"))
-            if not buf_files:
-                continue
-            if self._sudo_spec is None or self._sudo_path is None:
-                continue
-
-            self._training = True
-            log.info("ThermalTrainer: starting fine-tune cycle")
             try:
-                self._train_cycle(buf_files[0])
+                idle_s = time.time() - self._last_active
+                if idle_s < self.IDLE_BEFORE_TRAIN:
+                    continue
+                if self._thermal.state > ThermalState.WARM:
+                    continue
+                buf_files = list(TRAIN_DIR.glob("*_buffer.jsonl"))
+                if not buf_files:
+                    continue
+                if self._sudo_spec is None or self._sudo_path is None:
+                    continue
+
+                self._training = True
+                log.info("ThermalTrainer: starting fine-tune cycle")
+                try:
+                    self._train_cycle(buf_files[0])
+                except Exception as e:
+                    log.warning(f"ThermalTrainer error: {e}")
+                finally:
+                    self._training = False
+                    self.touch()
             except Exception as e:
-                log.warning(f"ThermalTrainer error: {e}")
-            finally:
+                log.debug(f"ThermalTrainer loop error: {e}")
                 self._training = False
-                self.touch()
 
     def _train_cycle(self, buf: Path) -> None:
         import psutil
@@ -3305,7 +3312,10 @@ def run_dashboard(
     try:
         with Live(console=console, refresh_per_second=2, screen=True) as live:
             while True:
-                live.update(_render())
+                try:
+                    live.update(_render())
+                except Exception as e:
+                    log.debug(f"Dashboard render error: {e}")
                 time.sleep(0.5)
     except KeyboardInterrupt:
         pass
@@ -4576,7 +4586,10 @@ def main():
     fe_path = write_frontend()
 
     def _run_backend() -> None:
-        uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="warning")
+        try:
+            uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="warning")
+        except Exception as e:
+            log.error(f"Backend server stopped: {e}")
 
     be_thread = threading.Thread(target=_run_backend, daemon=True, name="backend")
     be_thread.start()
@@ -4642,4 +4655,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except SystemExit:
+        raise
+    except Exception as exc:
+        log.error(f"Fatal error: {exc}", exc_info=True)
+        sys.exit(1)
